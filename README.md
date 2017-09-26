@@ -17,3 +17,6 @@ To install you must have node and npm.
 This is very much a work in progress.  There is no error handling for disconnects to properly reload player states if someone exits their
 window mid-game.  I have attempted to cover all bases where Google Speech API fails.  It is now deprecated and for whatever reason
 sometimes it will fail, the game should recover, just give it a few seconds.
+
+
+NOTE:  In order to have support for speech-to-text support in game, you must use Google Chrome.  Also, sorry Apple users, iOS does not support this at all.
