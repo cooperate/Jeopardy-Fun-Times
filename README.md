@@ -6,7 +6,7 @@ To install you must have node and npm.
 
 1) Install dependencies with command "npm install" from root folder of project.
 
-2) Start server with node app.js
+2) Start server with "node app.js"
 
 3) Your "host" screen will be @ <local address>:3000/game
 
