@@ -19,4 +19,4 @@ window mid-game.  I have attempted to cover all bases where Google Speech API fa
 sometimes it will fail, the game should recover, just give it a few seconds.
 
 
-NOTE:  In order to have support for speech-to-text in game, you must use Google Chrome.  Also, sorry Apple users, iOS does not support this at all.
+NOTE:  In order to have support for speech-to-text in game, you must use Google Chrome.  Also, sorry Apple users, iOS does not support this particular feature at all.
