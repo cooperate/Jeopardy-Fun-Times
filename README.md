@@ -8,9 +8,9 @@ To install you must have node and npm.
 
 2) Start server with "node app.js"
 
-3) Your "host" screen will be @ <local address>:3000/game
+3) Your "host" screen will be @ local-address:3000/game
 
-4) Three players can join @ <local address>:3000/player
+4) Three players can join @ local-address:3000/player
 
 5) Enjoy!
 
