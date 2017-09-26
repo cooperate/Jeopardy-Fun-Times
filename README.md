@@ -1,5 +1,5 @@
 # Jeopardy-Fun-Times
-A Jeopardy Game built using Socket.io and Google's Speech API
+A Jeopardy Game built using Socket.io, Google's Speech API and data from J-Archive! (http://j-archive.com/)
 
 
 To install you must have node and npm.
