@@ -6,7 +6,6 @@ var app = express();
 var http = require('http').Server(app);
 var io = require('socket.io')(http);
 var fs = require('fs');
-require('dotenv').config();
 
 app.use(express.static(__dirname + '/'));
 
