@@ -1047,8 +1047,8 @@ $(document).ready(function() {
 			switch(questionList[questionId].mediaType)
 			{
 				case "image":
-					getImageGoogle(questionList[questionId].answer);
-					//$("#question_field #image_container").html("<img id='question_image' alt='no image available' src=" + mediaLink + ">");
+					//getImageGoogle(questionList[questionId].answer);
+					$("#question_field #image_container").html("<img id='question_image' alt='no image available' src=" + mediaLink + ">");
 					break;
 				case "audio":
 					var audioClip = new Audio();
@@ -1063,13 +1063,13 @@ $(document).ready(function() {
 	}
 
 	//use google api to match the first search result from an answer
+	//disabled this, not sharing api key!
 	function getImageGoogle(questionAnswer){
-		var cx = "016302290608621917336:pnx9tnn9lwa";
-		var key = "AIzaSyDWX_V-uHPKeiaK36LEeINWRnJibslLpNM";
+		var cx = "";
+		var key = "";
 		var searchType = "image";
 		var num = 1;
 		var searchURL = "https://www.googleapis.com/customsearch/v1?key=" + key + "&cx=" + cx + "&q=" + questionAnswer + "&num=" + num + "&searchType=" + searchType;
-		//example: https://www.googleapis.com/customsearch/v1?key=AIzaSyDWX_V-uHPKeiaK36LEeINWRnJibslLpNM&cx=016302290608621917336:pnx9tnn9lwa&q=fast%20car&num=1&searchType=image
 		console.log("GOOGLE URL: " + searchURL);
 		$.getJSON( searchURL ).then(function( data ) {
 			console.log(data);

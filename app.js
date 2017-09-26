@@ -6,6 +6,7 @@ var app = express();
 var http = require('http').Server(app);
 var io = require('socket.io')(http);
 var fs = require('fs');
+require('dotenv').config();
 
 app.use(express.static(__dirname + '/'));
 
@@ -1121,7 +1122,7 @@ playerSpc.on('connection', function(socket){
   				var url_img_name = mediaLink;
   				//console.log(JSON.stringify(questions[question]));
   				url_img_name = url_img_name.split("/media/");
-  				var filePath = "/media/" +  questions[question].mediaType + "/" + url_img_name[1];
+  				var filePath = "/temp-media/" +  questions[question].mediaType + "/" + url_img_name[1];
 				if(false/*fs.existsSync(filePath)*/)// check if files already exist in database
 				{
 					console.log("doesn't need download");
