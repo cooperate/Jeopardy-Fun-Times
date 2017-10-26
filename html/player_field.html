@@ -6,10 +6,43 @@
 	</title>
 	<link rel="stylesheet" type="text/css" href="../css/style.css" >
 	<link rel="stylesheet" type="text/css" href="../css/input_name.css" >
-	<link rel="stylesheet" type="text/css" href="/node_modules/sweetalert/dist/sweetalert.css">
-	<link rel="stylesheet" href="/node_modules/sweetalert2/dist/sweetalert2.min.css">
+	<link rel="stylesheet" href="../node_modules/sweetalert2/dist/sweetalert2.min.css">
+	<link rel="stylesheet" href="../css/custom_radio.css">
 </head>
 <body>
+	<div class="game_options">
+	  <h2>Select Answer Time</h2>
+	  <p>
+   	 <input type="radio" id="time_1" name="radio-group-time-option" checked>
+	    <label for="time_1">15</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="time_2" name="radio-group-time-option">
+	    <label for="time_2">20</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="time_3" name="radio-group-time-option">
+	    <label for="time_3">30</label>
+	  </p>
+	  <h2>Select the Decade</h2>
+	  <p>
+   	 	<input type="radio" id="decade_1" name="radio-group-decade-option" checked>
+	    <label for="decade_1">80's</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="decade_2" name="radio-group-decade-option">
+	    <label for="decade_2">90's</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="decade_3" name="radio-group-decade-option">
+	    <label for="decade_3">2000's</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="decade_4" name="radio-group-decade-option">
+	    <label for="decade_4">2010's</label>
+	  </p>
+	  <button class="fancy_button bg-gradient1" id="options_accept">OK</button>
+	</div>
 	<div class="restart">
 		<form id="restart_game" action="">
 			<button class="fancy_button bg-gradient1" id="restart_btn">Play Again!</button>
@@ -42,7 +75,7 @@
 		      		<input id="answer_field" autocomplete="off" placeholder="What is..."/><button id="answer_btn">Submit</button>
 		    	</form>
 		    	<button id="start_button">
-    				<img id="start_img" src="mic.gif" alt="Start">
+    				<img id="start_img" src="../game-media/images/mic.gif" alt="Start">
     			</button>
 			</div>
 			<div class = "player_bet_field">
@@ -64,7 +97,7 @@
 			<h2 id="active_message"></h2>
 		</div>
 	</div>
-	<script src="/node_modules/sweetalert2/dist/sweetalert2.min.js"></script>
+	<script src="../node_modules/sweetalert2/dist/sweetalert2.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.7.3/socket.io.js"></script>
 	<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
     <script src="../javascript/libraries/transit.min.js"></script>

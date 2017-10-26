@@ -1,4 +1,11 @@
 $(document).ready(function() {
+	// To add to window
+	if(typeof Promise !== "undefined" && Promise.toString().indexOf("[native code]") !== -1){
+	    console.log("PROMISES WORK!");
+	}
+	else{
+		console.log("PROMISES DON'T WORK :(");
+	}
 
 	var playerName;
 	var playerScore = 0;
@@ -23,6 +30,7 @@ $(document).ready(function() {
 	$('.player_bet_field').css('display', 'none');
 	$('.restart').css('display', 'none');
 	$('.player_field').css('display', 'none');
+	$('.game_options').hide();
 
 	function beginCountdown(buzzerTime)
 	{
@@ -98,11 +106,6 @@ $(document).ready(function() {
 	  		else
 	  		{
 	  			$('#join_btn').prop('disabled',true);
-		  		postScreenMessage("Please wait for the game to begin.", false, 0);
-		  		setTimeout(function(){
-		  			$("#login_container").css('display', 'none');
-		  			$(".player_field").css('display', 'block');
-		  			}, 3000);
 	  			socket.emit('login name', loginNameStripped);
 	  			playerName = loginNameStripped;
 	  			$(".player_timer").append("<h2 id='player_name'>" + playerName + "</h2>");
@@ -125,49 +128,147 @@ $(document).ready(function() {
 
 	  socket.on('option select new', function(name){
 
+	  		var this_result;
+
 	  		if(playerName == name){
+	  			$(".login").fadeOut('fast', function() {
+	  				$(".game_options").fadeIn('slow', function() {
+	  					
+	  				});
+	  			});
+	  			
+	  			//socket.emit('option select new', [30, "00s"]);
 				// inputOptions can be an object or Promise
-				var inputOptions = new Promise(function (resolve) {
-				  setTimeout(function () {
-				    resolve({
+				var inputOptionsTime =  {
 				      '15': '15',
 				      '20': '20',
 				      '30': '30'
-				    })
-				  }, 1000)
-				})
+				    };
 
-				swal({
-				  title: 'Select answer time.',
-				  input: 'radio',
-				  inputOptions: inputOptions,
-				  inputValidator: function (result) {
+				var inputOptionsDecade = {
+				      '80s': '80s',
+				      '90s': '90s',
+				      '00s': '2000s',
+				      '10s': '2010s'
+				    };
+
+	  		/*swal.setDefaults({
+			  input: 'radio',
+			  confirmButtonText: 'Next &rarr;',
+			  showCancelButton: false,
+			  animation: true,
+			  progressSteps: ['1', '2']
+			});
+
+
+			var steps = [
+			  {
+			    title: 'Select Answer Time.',
+			    input: 'radio',
+			    inputOptions: inputOptionsTime,
+			    inputValidator: function (result) {
 				    return new Promise(function (resolve, reject) {
 				      if (result) {
-				        resolve()
+				        resolve();
 				      } else {
-				        reject('You need to select something!')
+				        reject('You need to select something!');
 				      }
 				    })
 				  }
-				}).then(function (result) {
-				 swal({
+			  },
+			  {
+			    title: 'Which decade would you like to play in?',
+			    input: 'radio',
+			    inputOptions: inputOptionsDecade,
+			    inputValidator: function (result) {
+				    return new Promise(function (resolve, reject) {
+				      if (result) {
+				        resolve();
+				      } else {
+				        reject('You need to select something!');
+				      }
+				    })
+				  }
+			  }
+			];
+
+			swal.queue(steps).then(function (result) {
+				this_result = result;
+			  swal({
 				  title: 'Get ready for Jeopardy!',
-				  text: 'The answer time is ' + result + ' seconds.',
+				  text: 'The answer time is ' + result[0] + ' seconds.',
 				  timer: 3500,
 				  showConfirmButton: false
 				}).then(
-				  function () {},
+				  function () {
+				  },
 				  // handling the promise rejection
 				  function (dismiss) {
 				    if (dismiss === 'timer') {
 				      console.log('I was closed by the timer')
+				      console.log("THIS RESULT DECADE AND TIMER: " + this_result);
+						socket.emit('option select new', this_result);	
+			 			swal.resetDefaults();
 				    }
-				  });
-				  socket.emit('option select new', result);
-				});
-	  		}
+				  }
+				)
+			});*/
+		}
+	  });
+	var options_accept_clicked = false;
 
+	$("#options_accept").click(function(){
+		var inputOptionsTime =  {
+		      '15': '15',
+		      '20': '20',
+		      '30': '30'
+		    };
+
+		var inputOptionsDecade = {
+		      '80\'s' : '80s',
+		      '90\'s' : '90s',
+		      '2000\'s' : '00s',
+		      '2010\'s' : '10s'
+		    };
+
+		if (!options_accept_clicked){
+			options_accept_clicked = true;
+			var time_radio; 
+			var decade_radio;
+
+			$('input[name="radio-group-time-option"]:checked').each(function() {
+				var idVal = $(this).attr("id");
+				time_radio = $("label[for='"+idVal+"']").text();
+			});
+			
+			$('input[name="radio-group-decade-option"]:checked').each(function() {
+				var idVal = $(this).attr("id");
+				decade_radio = $("label[for='"+idVal+"']").text();
+			});
+
+			var time_option = inputOptionsTime[time_radio];
+			var decade_option = inputOptionsDecade[decade_radio];
+
+			console.log("TIME OPTION: " + time_option + " DECADE OPTION: " + decade_option);
+				$(".game_options").css('display', 'none');
+				socket.emit('option select new', [time_option, decade_option]);
+				postScreenMessage("Please wait for the game to begin.", false, 0);
+				setTimeout(function(){
+					$("#login_container").css('display', 'none');
+					$(".player_field").css('display', 'block');
+				}, 3000);
+		}	
+
+	});
+
+	  socket.on('wait for start game',function(name){
+	  		if(playerName == name){
+		  		postScreenMessage("Please wait for the game to begin.", false, 0);
+		  		setTimeout(function(){
+		  			$("#login_container").css('display', 'none');
+		  			$(".player_field").css('display', 'block');
+		  		}, 3000);
+	  		}
 	  });
 
 	  socket.on('answer time data', function(answerTimeData){
@@ -313,6 +414,8 @@ $(document).ready(function() {
 	  });
 
 	  socket.on('expose question', function(){
+	  	console.log("THIS PLAYER EXPOSED QUESTION DEVICE IS: " + playerName);
+	  	socket.emit("expose question test", "THIS PLAYER EXPOSED QUESTION DEVICE IS: " + playerName);
 	  	$("#question_revealed").slideDown(1500);
 	  });
 
@@ -387,8 +490,14 @@ $(document).ready(function() {
 		$(".buzzer").css("background-color", "rgb(105,105,105)");
 	  });
 
-	//buzzer is pressed
+	//buzzer is pressed buzz in
 	$(".buzzer").click(function(){
+		console.log("clicked player field");
+		if(listenForClicks){
+			console.log("blocked clicks");
+			blockClicks = true;
+		}
+	 	socket.emit('buzzer press test', "BUZZER PRESSED BY : " + playerName);
 		if (!buzzerLock)
 		{
 			if (buzzerOpen)
@@ -399,18 +508,8 @@ $(document).ready(function() {
 		}
 	});
 
-	$(".buzzer").click(function(){
-		console.log("clicked player field");
-		if(listenForClicks){
-			console.log("blocked clicks");
-			blockClicks = true;
-		}
-	});
-
-
-	//capture buzzer press from all connected players
+	//capture buzzer press from all connected players //used to be buzzer pressed
 	 socket.on('buzzer pressed', function(pressed){
-
 	 	if (playerName != pressed.playerName)
 	 	{
 	 		postScreenMessage(pressed.playerName + " buzzed in and is typing their answer.", false, 0);
@@ -860,7 +959,7 @@ $(document).ready(function() {
 		  };
 		  recognition.onerror = function(event) {
 		    if (event.error == 'no-speech') {
-		      start_img.src = 'mic.gif';
+		      start_img.src = IMAGES_DIR + 'mic.gif';
 		      ignore_onend = true;
 		    }
 		    if (event.error == 'audio-capture') {
