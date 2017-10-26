@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>
+		Player Field
+	</title>
+	<link rel="stylesheet" type="text/css" href="../css/style.css" >
+	<link rel="stylesheet" type="text/css" href="../css/input_name.css" >
+	<link rel="stylesheet" href="../node_modules/sweetalert2/dist/sweetalert2.min.css">
+	<link rel="stylesheet" href="../css/custom_radio.css">
+</head>
+<body>
+	<div class="game_options">
+	  <h2>Select Answer Time</h2>
+	  <p>
+   	 <input type="radio" id="time_1" name="radio-group-time-option" checked>
+	    <label for="time_1">15</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="time_2" name="radio-group-time-option">
+	    <label for="time_2">20</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="time_3" name="radio-group-time-option">
+	    <label for="time_3">30</label>
+	  </p>
+	  <h2>Select the Decade</h2>
+	  <p>
+   	 	<input type="radio" id="decade_1" name="radio-group-decade-option" checked>
+	    <label for="decade_1">80's</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="decade_2" name="radio-group-decade-option">
+	    <label for="decade_2">90's</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="decade_3" name="radio-group-decade-option">
+	    <label for="decade_3">2000's</label>
+	  </p>
+	  <p>
+	    <input type="radio" id="decade_4" name="radio-group-decade-option">
+	    <label for="decade_4">2010's</label>
+	  </p>
+	  <button class="fancy_button bg-gradient1" id="options_accept">OK</button>
+	</div>
+	<div class="restart">
+		<form id="restart_game" action="">
+			<button class="fancy_button bg-gradient1" id="restart_btn">Play Again!</button>
+		</form>
+	</div>
+	<div id="login_container">
+		<div class= "login">
+			<div class="wrap-label">
+		     <label for="name">Your Name</label>
+		     <p class="iconicfill-pen-alt2"></p>
+		  </div>
+			<form id="player_login" action="">
+				<input id="login_name" autocomplete="off" /><button class="fancy_button bg-gradient1" id="join_btn">Join Game!</button>
+			</form>
+		</div>
+	</div>
+	<div id="message_overlay">
+		<img src="../game-media/images/jeopardy-logo.png" id="message_overlay_logo">
+	</div>
+	<div class = "player_field">
+		<div class = "player_field_container">
+			<div class = "player_question">
+				<h2 id="question_revealed"> Your Question Will Appear Here </h2>
+			</div>
+			<div class= "player_buzzer">	
+				<button class="buzzer"> BUZZ IN </button>
+			</div>
+			<div class = "player_answer_field">
+				<form id="answer_submit" action="">
+		      		<input id="answer_field" autocomplete="off" placeholder="What is..."/><button id="answer_btn">Submit</button>
+		    	</form>
+		    	<button id="start_button">
+    				<img id="start_img" src="../game-media/images/mic.gif" alt="Start">
+    			</button>
+			</div>
+			<div class = "player_bet_field">
+				<form id="bet_submit" action="">
+		      		<input id="bet_field" autocomplete="off" placeholder="Enter your wager."/><button id="bet_btn">Make Bet</button>
+		    	</form>
+			</div>
+			<div class = "player_timer">
+				<table id="timer_table" cellspacing="0">
+				<tr>
+					<td class="timer_cell_5">&nbsp;</td><td class="timer_cell_4">&nbsp;</td><td class="timer_cell_3">&nbsp;</td><td class="timer_cell_2">&nbsp;</td>
+					<td class="timer_cell_1">&nbsp;</td>
+					<td class="timer_cell_2">&nbsp;</td><td class="timer_cell_3">&nbsp;</td><td class="timer_cell_4">&nbsp;</td><td class="timer_cell_5">&nbsp;</td>
+				</tr>
+				</table>
+			</div>
+		</div>
+		<div>
+			<h2 id="active_message"></h2>
+		</div>
+	</div>
+	<script src="../node_modules/sweetalert2/dist/sweetalert2.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.7.3/socket.io.js"></script>
+	<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+    <script src="../javascript/libraries/transit.min.js"></script>
+	<script src="../javascript/pages/player_field.js"></script>
+	<script src="../javascript/libraries/gradients.js"></script>
+</body>
+</html>

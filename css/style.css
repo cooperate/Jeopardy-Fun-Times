@@ -1,0 +1,748 @@
+/* GAME BOARD */
+
+body{
+	margin: 0 !important;
+}
+#game_container
+{
+	top: 0px;
+    right: 0px;
+    background: rgba(189, 189, 189, 1);
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    left: 0;
+    top: 0;
+    z-index: 10;
+}
+
+#game_container
+{
+    display:flex;
+}
+
+#login_container{
+    width: 100%;
+    height: 100%;
+    z-index: 97;
+    position:absolute;
+}
+
+/* player login */
+.login
+{
+	top: 50%;
+    transform: translateY(-50%);
+    position: relative;
+    margin: auto;
+    width: 300px;
+}
+
+#player_login
+{
+	text-align: center;
+}
+
+.player_name_bubbles {
+	height: 33.33%;
+	bottom: 0;
+	position: absolute;
+	width: 100%;
+}
+
+.player_name_bubbles div {
+	margin-left: 100px;
+	margin-right: 100px;
+	display: inline-block;
+	width: 400px;
+	height: 400px;
+	background: #3F51B5;
+	-moz-border-radius: 50%;
+	-webkit-border-radius: 50%;
+	border-radius: 50%;
+	bottom: 80px;
+}
+
+.player_name_bubbles h2 {
+	font-size: 50px !important;
+	color: white;
+	position: relative !important;
+}
+
+#game_board_container
+{
+	float:left;
+	width:85%;
+}
+
+#player_board
+{
+	float:left;
+	width: 15%;
+	z-index: 11;
+	background: white;
+}
+
+#airdate_screen{
+	background-color: black;
+	position: absolute;
+	width: 100%;
+	height: 100%;
+}
+
+#airdate_text{
+	position: inline-flex;
+	color: white !important;
+	font-family: Optima, Segoe, "Segoe UI", Candara, Calibri, Arial, sans-serif;
+	font-style: normal;
+	font-variant: normal;
+	font-weight: 500;
+	padding: 0% 10% 0% 10%;
+    margin: 0;
+    font-size: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+}
+
+#game_board{
+	height: 100%;
+	width: 100%;
+	background: white;
+}
+
+#game_board td, #game_board th {
+	width:16%;
+	text-align: center;
+	color: #ffea00;
+	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0;/*#3f51b5;*/
+	font-family: Impact, Charcoal, sans-serif;
+}
+
+#game_board tr td{
+	font-size:95px;
+	text-shadow: 2px 2px black;
+}
+/*linear-gradient(#26A69A, #80CBC4 );*/
+
+ #game_board th{
+	color:white;
+	font-size:56px;
+}
+
+#players_table{
+	font-family: Impact, Charcoal, sans-serif;
+	text-align: center;
+	font-size:14px;
+	width:100%;
+	height: 100%;
+	empty-cells: show;
+	border-collapse: collapse;
+}
+
+#players_table tr.name 
+{
+	background-color:#9575cd;
+	color:white;
+	font-size: 68px;
+	height:12%;
+}
+
+#players_table tr.score 
+{
+	background-color:black;
+	color:white;
+	height:80px;
+	font-size: 70px;
+}
+
+/* quesiton field  for client player screen*/
+#tempGAME
+{
+	top: 0px;
+    right: 0px;
+    background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0;/* #3f51b5;*/
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    left: 0;
+    top: 0;
+    z-index: 10;
+    display:flex;
+}
+
+/*the question field*/
+#question_field{
+	top: 0px;
+    right: 0px;
+    z-index: 10;
+    background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /*#3f51b5;*/
+    position: fixed;
+    width: 85%;
+    font-size: 65px;
+    height: 100%;
+    left: 0;
+    top: 0;
+    display: flex;              /* establish flex container */
+    flex-direction: column;     /* stack flex items vertically */
+    justify-content: center;    /* center items vertically, in this case */
+    align-items: center;  
+    overflow: hidden;
+	clear:both;
+}
+
+#question_field h2{
+	font-family: Optima, Segoe, "Segoe UI", Candara, Calibri, Arial, sans-serif;
+	font-style: normal;
+	font-variant: normal;
+	font-weight: 500;
+	padding: 0% 10% 0% 10%;
+    margin: 0;
+	color: white;
+	text-align:center;
+}
+
+#question_field canvas{
+	top:80%;
+	position:absolute;
+}
+/*message overlay*/
+#message_overlay{
+	top: 0px;
+    right: 0px;
+    position: fixed;
+    height: 100%;
+    left: 0;
+    top: 0;
+    z-index: 98;
+    display:flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#master_container{
+	position:fixed;
+	width:100%;
+	height:100%;
+}
+#master_container #message_overlay
+{
+	width:85%;
+}
+
+.player_field #message_overlay
+{
+	width:100%;
+}
+
+.player_field
+{
+	z-index: 96;
+	position: absolute;
+	width:inherit;
+	height:inherit;
+}
+
+#start_button, .game_select_button *{
+	border-radius: 10px;
+    -moz-border-radius: 10px;
+    -webkit-border-radius: 10px;
+    border: none;
+    width: 30%;
+    margin: 15px;
+}
+
+ .game_select_button *{
+    background-color:rgba(21, 101, 192, 0.9);
+    font-size: 50px;
+    padding-bottom: 50px;
+    padding-top: 50px;
+ }
+
+ #game_select_button_container{
+ 	position: absolute;
+    top:50%;
+    left: 50%;
+    right: 0;
+    width: 1000px;
+    height: 300px;
+    margin: -150px 0 0 -500px;
+    text-align:center;
+ }
+
+#message_overlay h2{
+	font-family:  Arial;
+	font-size: 70px;
+	font-style: bold;
+	font-variant: normal;
+	font-weight: 800;
+	padding-left:15%;
+	padding-right:15%;
+	text-align:center;
+	color: white;
+}
+
+
+.question_display{
+	display:none;
+	position: absolute;
+	top:100px;
+	height: 98%;
+	width: 98%;
+	background:rgba(0, 76, 153, 1);
+	justify-content: center;
+	align-items: center;
+}
+.question_display h2{
+	padding: 20%;
+	font-size: 70px;
+	color: #ffffcc;
+	clear:left;
+	clear:right;
+	font-family: "Arial";
+}
+
+
+/* category/player display */
+#category_container, #player_container{
+	top: 0px;
+    right: 0px;
+    background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0;/* #3f51b5;*/
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    left: 0;
+    top: 0;
+    z-index: 99;
+}
+
+.category_display{
+	width: inherit;
+	height: inherit;
+	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /*#3f51b5;*/
+	font-family: Impact, Charcoal, sans-serif;
+	text-align:center;
+}
+
+.secure_category_container
+{
+	display:flex;
+	justify-content: center;
+	align-items:center;
+	height: inherit;
+}
+.secure_category_container h2{
+	font-size:130px;
+	color: white;
+	text-align: center;
+	margin:auto;
+}
+
+.player_display
+{
+	display:flex !important;
+	justify-content: center;
+	align-items:center;
+	height: inherit !important;
+	width:inherit !important;
+	width: inherit;
+	height: inherit;
+	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /* #3f51b5;*/
+	font-family: Impact, Charcoal, sans-serif;
+}
+.player_type{
+	position: absolute;
+    right: -50px;
+    height: 33.333%;
+    width: 50px;
+    border-radius: 25px 0px 0px 25px;
+	background-color:#FFA726;
+	font-size: 20px;
+	font-family: Impact, Charcoal, sans-serif;
+	display: flex;
+    justify-content: center;
+    align-items: center;
+	margin:0 auto;
+	text-align: center;
+}
+.player_type h2{
+	z-index: 2;
+	transform: rotate(270deg);
+	margin: 0;
+	position: absolute;
+    width: 400px;
+}
+#player_typing_0
+{
+	top:0%;
+	z-index: 2;	
+}
+#player_typing_1
+{
+	top:33.333%;
+	z-index: 2;
+}
+#player_typing_2{
+	top:66.666%;
+	z-index: 2;
+}
+.progress{
+	width:100%;
+	height:0%;
+	z-index:1;
+	border-radius: 25px 0px 0px 25px;
+	position:absolute;
+	top:0px;
+	left:0px;
+	background:#4CAF50;
+	overflow: hidden;
+}
+#question_container{
+	width: inherit;
+	height: inherit;
+}
+.secure_player_container
+{
+    margin: auto;
+}
+
+
+.secure_player_container h2 {
+	font-size:130px;
+	color: white;
+	text-align: center;
+}
+
+.restart{
+	position: absolute;
+    top: 50%;
+    left: 50%;
+    margin-right: -50%;
+    transform: translate(-50%, -50%);
+    z-index:999;
+}
+
+#question_image{
+	text-align:center; 
+	height: 350px;
+	display:block;
+	margin:auto;
+}
+
+#image_container{
+	width:100%;
+	text-align:center;
+}
+
+#music_container{
+	width:100%;
+	text-align:center;
+}
+
+#daily_double_icon{
+	display:none;
+	background: #EF5350;
+	border: 10px solid red;
+    border-radius: 12px;
+    position: absolute;
+    text-align: center;
+    top:80%;
+}
+
+#daily_double_bet{
+	position: absolute;
+	top:10%;
+	left:10%;
+}
+
+/* PLAYER BOARD */
+
+.buzzer {
+  padding: 15px 25px;
+  font-size: 64px;
+  cursor: pointer;
+  text-decoration: none;
+  outline: none;
+  color: #fff;
+  background-color: #4CAF50;
+  border: none;
+  border-radius: 15px;
+  box-shadow: 0 9px #999;
+  width: 80%;
+  height: 100%;
+}
+
+.player_field_container{
+	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0;/* #3f51b5;*/
+	top: 0px;
+    right: 0px;
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    left: 0;
+    top: 0;
+    z-index: 1;
+}
+
+.buzzer:hover {background-color: #3e8e41}
+
+.buzzer:active {
+  background-color: #3e8e41;
+  box-shadow: 0 5px #666;
+  transform: translateY(4px);
+}
+
+.login {
+	z-index: 2;
+}
+
+.player_timer{
+	height:28%;
+}
+
+.player_timer h2{
+	float:left;
+}
+.player_question{
+ 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /*#3f51b5;*/
+ 	height: 35%;
+	display:flex;
+    align-items: center;
+    justify-content: center;
+}
+	
+.player_question h2, #player_score, #player_name{
+	font-family: Arial, sans-serif;
+	font-size: 35px;
+	font-style: bold;
+	font-variant: normal;
+	font-weight: 800;
+	padding-left:15%;
+	padding-right:15%;
+	color: white;
+	text-align:center;
+}
+
+/*  IPAD SIMULATOR
+.player_question #question_revealed{
+	top: 50%;
+	position: relative;
+}
+*/
+
+.player_buzzer{
+	 text-align: center;
+	 height: 35%;
+}
+
+#answer_field, #bet_field{
+	border: none;
+    color: #525252;
+    font-size: 60px;
+    margin-bottom: 16px;
+    margin-right: 6px;
+    margin-top: 2px;
+    outline: 0 none;
+    padding: 10px 25px 10px 25px;
+    width: 70%;
+    border-radius: 2px;
+    -webkit-border-radius: 2px;
+    -moz-border-radius: 2px;
+    -moz-box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075);
+    background: #DFDFDF;
+}
+
+#answer_submit, #bet_submit
+{
+	text-align:center;
+}
+#answer_submit button, #bet_btn
+{
+	font-size: 60px;
+	background: #FFCC02;
+    border: none;
+    padding: 10px 25px 10px 25px;
+    color: #585858;
+    border-radius: 4px;
+    -moz-border-radius: 4px;
+    -webkit-border-radius: 4px;
+    text-shadow: 1px 1px 1px #FFE477;
+    font-weight: bold;
+    box-shadow: 1px 1px 1px #3D3D3D;
+    -webkit-box-shadow:1px 1px 1px #3D3D3D;
+    -moz-box-shadow:1px 1px 1px #3D3D3D;
+}
+.player_answer_field, .player_bet_field
+{
+	height: 35%;
+	width:100%;
+}
+
+.player_answer_field{
+	text-align:center;
+}
+/*timer*/
+#timer_table{
+	width:100%;
+	height:60%;
+	padding-top:30px;
+}
+
+#timer_table td{
+	border: 5px solid #757575;
+	background-color: rgb(239, 83, 80);
+}
+
+/* CSS FOR MOBILE*/
+
+/* tablets */
+@media only screen and (max-width: 1024px), only screen and (max-device-width: 1024px) {
+
+	#game_board tr td{
+		font-size:35px;
+	}
+
+	#tempGAME tr td{
+		font-size:35px;
+	}
+
+	#tempGAME tr th{
+	color:white;
+	font-size:24px;
+	}
+
+	#game_board tr th{
+	color:white;
+	font-size:24px;
+	}
+
+	#answer_field
+	{
+		font-size: 40px;
+	}
+
+	#answer_submit button
+	{
+		font-size:40px;
+	}
+}
+
+/*phones
+@media only screen and (max-width: 480px), only screen and (max-device-width: 480px) {
+   	#game_board tr:not(:first-child) td{
+		font-size:18px;
+	}
+
+	#tempGAME tr:not(:first-child) td{
+		font-size:35px;
+	}
+	#answer_field
+	{
+		font-size: 30px;
+	}
+
+	#answer_submit button
+	{
+		font-size:30px;
+	}
+}*/
+
+/*ANIMATIONS*/
+
+.flash_buzzer {
+    -webkit-animation-name: flashBuzzer;
+    -webkit-animation: flashBuzzer linear 1s infinite;
+	  animation: flashBuzzer linear 1s infinite;
+    -webkit-animation-timing-function: ease-in-out;
+}    
+
+@-webkit-keyframes flashBuzzer {
+    0% {
+        background-color: Blue;
+        opacity:1;
+    }
+    22% {
+        background-color: Yellow;
+    }
+    77% {
+        background-color: Red;
+    }
+    100% {
+        background-color: #777;
+    }
+}
+
+/* alerts */
+.alert {
+  position: relative;
+}
+
+.alert .close {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  font-size: 1em;
+}
+
+.alert .fa {
+  margin-right:.3em;
+}
+
+/*intro video*/
+video { 
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    min-width: 100%;
+    min-height: 100%;
+    width: auto;
+    height: auto;
+    z-index: -100;
+    transform: translateX(-50%) translateY(-50%);
+ background: url('//demosthenes.info/assets/images/polina.jpg') no-repeat;
+  background-size: cover;
+  transition: 1s opacity;
+}
+
+/*background animate*/
+#message_overlay{
+    background: #2980b9 url('https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png') repeat 0 0;
+	-webkit-animation: 10s linear 0s normal none infinite animate;
+	-moz-animation: 10s linear 0s normal none infinite animate;
+	-ms-animation: 10s linear 0s normal none infinite animate;
+	-o-animation: 10s linear 0s normal none infinite animate;
+	animation: 10s linear 0s normal none infinite animate;
+}
+
+#message_overlay #message_overlay_logo{
+	position: absolute;
+	top: 80%;
+	margin-right: 20px;
+	width: 20%;
+}
+ 
+@-webkit-keyframes animate {
+	from {background-position:0 0;}
+	to {background-position: 500px 0;}
+}
+ 
+@-moz-keyframes animate {
+	from {background-position:0 0;}
+	to {background-position: 500px 0;}
+}
+ 
+@-ms-keyframes animate {
+	from {background-position:0 0;}
+	to {background-position: 500px 0;}
+}
+ 
+@-o-keyframes animate {
+	from {background-position:0 0;}
+	to {background-position: 500px 0;}
+}
+ 
+@keyframes animate {
+	from {background-position:0 0;}
+	to {background-position: 500px 0;}
+}
