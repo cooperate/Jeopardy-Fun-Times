@@ -42,20 +42,18 @@ var curActivePlayer; //player who holds the current lead for picking questions
 var file = __dirname + '/data/JEOPARDY_CSV_test.csv';
 var lastNameFile = __dirname + '/data/last_name_stripped.csv';
 var gameHistory = __dirname + '/data/games_played.csv';
-var csv = fs.readFileSync(file, {
-  encoding: 'binary'
-});
-var parsed = Baby.parse(csv);
-var rows = parsed.data;
-var gameID = getGameID();
 var buzzerFlipped = false;
 var buzzedInPlayerName;  //tracks player currently answering questions
 
 //TIMERS 
 var roundTimerObject;
-const ROUND_TIME = 600;
+const ROUND_TIME = 600;//600;
 var ANSWER_TIME = 15;
 var roundTimer = ROUND_TIME;
+var ROUND_QUESTIONS = 30;
+var DECADE = "10s";
+var AIRDATE = "0";
+var GAME_ID = 0;
 var questionTimer = null;
 var questionTimerCount = 6;
 var buzzedInTimer = null;
@@ -66,6 +64,8 @@ var isSecondRound = false;
 var finalJeopardyCheck = false;
 var newGameCounter = 0;
 
+var sqlite3 = require('sqlite3').verbose();
+var db = new sqlite3.Database('./data/clues.db');
 
 class Player
 	{
@@ -126,7 +126,7 @@ class Player
 
 class Question
 	{
-		constructor(category, value, question, answer, dailyDouble, questionId)
+		constructor(category, value, question, answer, dailyDouble, questionId, mediaLink, round)
 		{
 			this._category = category;
 			this._value = value;
@@ -134,9 +134,15 @@ class Question
 			this._answer = answer;
 			this._dailyDouble = dailyDouble;
 			this._questionId = questionId;
-			this._mediaLink = "no url";
+			this._mediaLink = mediaLink;
 			this._mediaType = "none";
 			this._isProperName = false;
+			this._round = round;
+		}
+
+		get round()
+		{
+			return this._round;
 		}
 
 		get category()
@@ -224,144 +230,19 @@ class Question
 		}
 	}
 
-	function createCategories(gameData)
-	{
-		var tempQuestions = new Array();
-		var category=0;
-		var questionNum=0;
-		var counter = 0;
-		var values = new Array();
-		var dailyDoubleQuestionsId = getDailyDoubleQuestionIds();
 
-		for(var data in gameData)
-		{	
-			var round = "J_";
-
-			if (counter<60 && counter >=30)
-			{
-				round = "DJ_";
-			}
-			else if(counter >= 60)
-			{
-				round = "FJ_"
-			}
-
-			switch (round)
-			{
-				case "J_":
-					values = [
-						200,
-						400,
-						600,
-						800,
-						1000
-					];
-					break;
-				case "DJ_":
-					values = [
-						400,
-						800,
-						1200,
-						1600,
-						2000
-					]
-					break;
-				case "FJ_":
-					//special round
-					break;
-			}
-
-			tempQuestions[round + category + "_" + questionNum] = new Question(gameData[data][3], values[questionNum], gameData[data][5], gameData[data][6], false, round + category + "_" + questionNum); //category, value, question, answer)
-
-			var questionStrip = parseQuestion(tempQuestions[round + category + "_" + questionNum].question);
-
-			var answerStrip = parseAnswer(tempQuestions[round + category + "_" + questionNum].answer);
-
-
-			/*var properNameRegEx =  new RegExp("/[A-Z])\w+\ +([A-Z])\w/", "g");
-			var properNameRegExTwo = new RegExp("/[A-Z])\w+\ +([A-Z])\w+\ +([A-Z])\w/", "g");
-			var searchResultProperName = tempQuestions[round + category + "_" + questionNum].answer.search(properNameRegEx);
-			var searchResultProperNameTwo = tempQuestions[round + category + "_" + questionNum].answer.search(properNameRegExTwo);
-
-			if(searchResultProperName || searchResultProperNameTwo){
-				tempQuestions[round + category + "_" + questionNum].isProperName = true;
-			}*/
-
-			tempQuestions[round + category + "_" + questionNum].question = questionStrip.question;
-
-			tempQuestions[round + category + "_" + questionNum].mediaLink = questionStrip.media;
-
-			tempQuestions[round + category + "_" + questionNum].mediaType = questionStrip.mediaType;
-
-			tempQuestions[round + category + "_" + questionNum].answer = answerStrip;
-
-			//check if this question is a Daily Double!
-			var indexDD;
-
-			for (indexDD in dailyDoubleQuestionsId)
-			{
-				if (counter == dailyDoubleQuestionsId[indexDD])
-				{
-					tempQuestions[round + category + "_" + questionNum].dailyDouble = true;
-					console.log(tempQuestions[round + category + "_" + questionNum]);
-				}
-			}
-
-			category++;
-			counter++;
-			
-			if (category >= 6 )
-			{
-				category = 0;
-				questionNum++;
-			}
-
-			if (questionNum >= 5)
-			{
-				questionNum = 0;
-			}
-		}
-
-		return tempQuestions;
-	}
-
-
-	function getDailyDoubleQuestionIds()
-	{
-		var firstRoundDD = Math.floor((Math.random() * 30));
-		var secondRoundDD = Math.floor((Math.random() * 30) + 30);
-		var thirdRoundDD = Math.floor((Math.random() * 30) + 30);
-		while(thirdRoundDD == secondRoundDD)
-		{
-			thirdRoundDD = Math.floor((Math.random() * 30) + 30);
-		}
-
-		var dDValues = new Array(firstRoundDD, secondRoundDD, thirdRoundDD);
-		
-		return dDValues;
-	}
-
-	function parseQuestion(question)
+	function parseMediaType(media)
 	{	
-		//attempt to extract and display video/images if included
-		console.log("PARSE THIS QUESTION: " + question);
-		var urlLinkRegEx = new RegExp("<a.+?href=\"([^\"]+)", "g");
-		var urlLink = urlLinkRegEx.exec(question);
-	 	//urlLink = urlLink[0];
-	 	if(urlLink != null){
-	 		urlLink = urlLink[1];
-	 		console.log("this is the url" + urlLink[1]);
-	 	}
-	 	else{
-	 		urlLink = "";
-	 	}
+		var urlLink = media;
+
 		var mediaType = "none";
 
-		if (urlLink!='' && urlLink!= undefined)//link exists
+		if (urlLink)//link exists
 		{
 			// Use a regular expression to trim everything before final dot
         	var extension = urlLink.replace(/^.*\./, '');
 			var extension = extension.toLowerCase();
+			console.log("EXTENSION TRIM IS " + extension);
 			switch(extension) {
 				case 'jpg': 
 					mediaType = "image";
@@ -392,15 +273,8 @@ class Question
 			}
 
 		}
-		else
-		{
-			urlLink = "no url";
-		}
-		//remove all anchor tags and their content
-		var newQuestion = question.replace(/<\/?a[^>]*>/g, "");
 
-
-		return {question: newQuestion, media: urlLink, mediaType: mediaType};
+		return mediaType;
 	}
 
 	function parseAnswer(answer)
@@ -447,31 +321,8 @@ checkForFullGame();
 
 
 function checkForFullGame(){
-	gameData.length = 0;
+	//TODO COUNT RESULTS FROM DB QUERY
 
-	for (var row in rows)
-	{	
-		if (rows[row][0] == gameID) //showID5070 5195
-		{
-			gameData.push(rows[row]);
-		}
-	}
-
-	if (gameData.length < 61)
-	{
-		var csvGamesPlayed = fs.readFileSync(gameHistory, {
-		  encoding: 'binary'
-		});
-		var parsedGamesPlayed = Baby.parse(csvGamesPlayed);
-		var rowsGamesPlayed = parsedGamesPlayed.data;
-		console.log("Rows Games Played: " + rowsGamesPlayed);
-		if (rowsGamesPlayed.indexOf(gameID) === -1)
-		{
-    		fs.appendFileSync(gameHistory, '\n' + gameID);
-    	}
-    	gameID = getGameID();
-    	checkForFullGame();
-	}
 }
 
 /*DOWNLOAD REQUIRED IMAGES*/
@@ -549,17 +400,19 @@ gameSpc.on('connection', function(socket){
 
   //Whenever someone disconnects this piece of code executed
   socket.on('disconnect', function () {
-  	for (var question in questions) delete questions[question];
-  	for (var player in players) delete players[player];
     console.log('A user disconnected');
   });
+
+  socket.on('question timer out', function(){
+  	questionTimesUp();
+  })
 
   //assign random player
   socket.on('player random', function(data){
   		var playerActive = players[findRandomPlayer()];
   		playerActive.isActive = true;
-  		playerSpc.emit('active player', {playerName: getPlayerActive(), gameMarkup: data.gameMarkup, newGame: "new game"});
-  		gameSpc.emit('active player', {playerName: getPlayerActive(), newGame: "new game"});
+  		playerSpc.emit('active player', {playerName: getPlayerActive(), gameMarkup: data.gameMarkup, newGame: "new game", airdate: AIRDATE});
+  		gameSpc.emit('active player', {playerName: getPlayerActive(), newGame: "new game", airdate: AIRDATE});
   });
 
   socket.on('final jeopardy started', function(){
@@ -577,7 +430,7 @@ gameSpc.on('connection', function(socket){
   });
 
     socket.on('game over', function(winningPlayerName){
-    	fs.appendFileSync(gameHistory, '\n' + gameID);
+    	fs.appendFileSync(gameHistory, '\n' + GAME_ID);
     	playerSpc.emit('game over', winningPlayerName);
     });
 
@@ -602,7 +455,6 @@ gameSpc.on('connection', function(socket){
 
   socket.on('start countdown', function(questionId){
   	curQuestionId = questionId;
-  	questionTimerCount = 6;
   	questionBeginCountdown();
   	gameSpc.emit('countdown', {timerCount: questionTimerCount, questionId: questionId});
   	playerSpc.emit('expose question');
@@ -610,7 +462,7 @@ gameSpc.on('connection', function(socket){
 
   socket.on('continue countdown', function(questionId){
   	questionContinueCountdown();
-  	gameSpc.emit('countdown', {timerCount: questionTimerCount, questionId: questionId});
+  	gameSpc.emit('countdown', {timerCount: questionTimerCount, questionId: questionId}); //is this being called earlier somehow>SSS
   });
 
   socket.on('open submit dd', function(){
@@ -622,29 +474,31 @@ gameSpc.on('connection', function(socket){
 	//after all messages are done move play to next active player
 
 	socket.on('finished all messages dd', function(){
-		if (!finalJeopardyCheck){
+		console.log('finished all messages dd');
+		//if (!finalJeopardyCheck){
 			playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
 			gameSpc.emit('active player', {playerName: getPlayerActive(), correct: false});
-		}
+		//}
 	});
 
 	socket.on('all messages done score update correct', function(){ 
-		if(!finalJeopardyCheck){
+		//if(!finalJeopardyCheck){
 			console.log("Next player should be going...");
 			playerSpc.emit('active player', {playerName: getPlayerActive(), correct: true, newGame: "no"});
 			gameSpc.emit('active player', {playerName: getPlayerActive(), correct: true});
-		}
+		//}
 	});
 	socket.on('all messages done score update', function(){ 
-		if(!finalJeopardyCheck){
+		//if(!finalJeopardyCheck){
 			console.log("Next player should be going...");
 			playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
 			gameSpc.emit('active player', {playerName: getPlayerActive(), correct: false});
-		}
+		//}
 	});
 
 	socket.on('all messages done buzzed in time out', function(){
-		if (checkIfAllPlayersAnswered() && !finalJeopardyCheck){
+		console.log('all messages done buzzed in time out');
+		if (checkIfAllPlayersAnswered()/*&& !finalJeopardyCheck*/){
 			playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
 			gameSpc.emit('active player', {playerName: getPlayerActive(), correct: false});
 		}
@@ -667,21 +521,13 @@ gameSpc.on('connection', function(socket){
 	  		players[player].isActive = false;
 	  	}
 	  	//pick next possible game
-		csv = fs.readFileSync(file, {
-		  encoding: 'binary'
-		});
-		parsed = Baby.parse(csv);
-		rows = parsed.data;
-		gameID = getGameID();
-		for (var row in rows)
-		{	
-			if (rows[row][0] == gameID) //showID5070 5195
-			{
-				gameData.push(rows[row]);
-			}
-		}
+	  	//CHOOSE GAME FROM DB
 		console.log(gameData);
 		setGameDataNew();
+	});
+
+	socket.on('buzzer pressed confirmed', function(nameData){
+		playerSpc.emit('buzzer pressed', {playerName: nameData.playerName, questionId: nameData.questionId});
 	});
 
 });
@@ -691,7 +537,7 @@ playerSpc.on('connection', function(socket){
 	console.log('player connected.');
 	//handle player login name/ player join
   	socket.on('login name', function(name){
-	  	console.log(name);
+	  	console.log("PLAYER JOINED WITH NAME: " + name);
 	  	socket.username = name;
 	  	 gameSpc.emit('login name', name);
 	  	 players[name] = new Player(name);
@@ -699,15 +545,52 @@ playerSpc.on('connection', function(socket){
 	  	 {
 	  	 	playerSpc.emit('option select new', name);
 	  	 }
+	  	 else
+	  	 {
+	  	 	playerSpc.emit('wait for start game', name);
+	  	 }
   	});
 
-  	//set global turn time
-  	socket.on('option select new', function(optionObject){
-  		ANSWER_TIME = optionObject;
+  	//TESTS
+  	socket.on('buzzer press test', function(playerNameBuzzed){
+  		console.log("THIS PLAYER JUST BUZZED IN: " + playerNameBuzzed);
+  	});
+
+  	socket.on('expose question test', function(playerNameExposed){
+  		console.log("PLAYER NAMED EXPOSED QUESTION " + playerNameExposed);
+  	});
+
+  	//set global turn time, grab game id
+  	socket.on('option select new', function(optionArray){
+  		console.log(optionArray);
+  		ANSWER_TIME = optionArray[0];
+  		DECADE = optionArray[1];
   		playerSpc.emit('answer time data', ANSWER_TIME);
   		gameSpc.emit('answer time data', ANSWER_TIME);
-  		setGameDataNew();
+  		selectByDecade(DECADE, function(returnValue) {
+  			GAME_ID = returnValue.game;
+  			AIRDATE = returnValue.airdate;
+  			var tempDate = new Date(AIRDATE);
+  			AIRDATE = formatDate(tempDate);
+  			console.log("GAME_ID: " + GAME_ID + " AIRDATE " + AIRDATE);
+  			setGameDataNew();
+		});
   	});
+
+  	function formatDate(date) {
+		  var monthNames = [
+		    "January", "February", "March",
+		    "April", "May", "June", "July",
+		    "August", "September", "October",
+		    "November", "December"
+		  ];
+
+		  var day = date.getDate();
+		  var monthIndex = date.getMonth();
+		  var year = date.getFullYear();
+
+		  return monthNames[monthIndex] + ' ' + day + ', ' + year;
+	}
 
   socket.on('new game', function(){
   	playerSpc.emit('new game');	
@@ -723,6 +606,8 @@ playerSpc.on('connection', function(socket){
 
   //When active user selects a question
   socket.on('question selected', function (questionId) {
+  	questionTimerCount = 6;
+  	console.log("QUESTION SELECTED ID: " + questionId);
   	buzzerFlipped = false;
   	if(roundTimer>0)
   	{
@@ -748,7 +633,6 @@ playerSpc.on('connection', function(socket){
   		{
   			buzzedInPlayerName = playerName;
 		  	gameSpc.emit('buzzer pressed', {playerName: playerName, questionId: curQuestionId});
-		  	playerSpc.emit('buzzer pressed', {playerName: playerName, questionId: curQuestionId});
 		  	players[playerName].givenAnswer = true;
 		  	buzzedInTimerCount = ANSWER_TIME;
 		  	buzzedInBeginCountdown();
@@ -769,8 +653,7 @@ playerSpc.on('connection', function(socket){
 			  		console.log('stopping timer.');
 					stopTimer(questionTimer);
 					//stopTimer(this.int);
-					questionTimesUp();
-					questionTimerCount = 6;
+					//questionTimesUp();
 					questionTimer = null;
 				}
 			}, 1000);
@@ -824,6 +707,7 @@ playerSpc.on('connection', function(socket){
   });
   //Whenever someone disconnects this piece of code executed
   socket.on('disconnect', function () {
+
     console.log('A user disconnected');
   });
 
@@ -896,6 +780,7 @@ playerSpc.on('connection', function(socket){
 		var playerAnswerArrayTemp = playerAnswer.split(" ");
 		console.log(playerAnswerArrayTemp.length);
 		if (playerAnswerArrayTemp.length == 1){
+			console.log("THIS IS A PROPER NAME");
 			isName = checkIfName(playerAnswer);
 		}
 
@@ -913,6 +798,8 @@ playerSpc.on('connection', function(socket){
 			var badWords = new Array(
 				"THE",
 				"THEN",
+				"ST",
+				"ST.",
 				"IS",
 				"WHAT ",
 				"A",
@@ -1110,42 +997,167 @@ playerSpc.on('connection', function(socket){
 	}
 });
 
+//helper functions
 
   	function setGameDataNew(){
-   		questions = createCategories(gameData);
-  		for(question in questions){
+  		var last_clue_id = 0;
+  		var first_clue_id;
+  		var question_object_ids = {};
+  		var queryQuestions ="SELECT clues.id, clues.game, round, value, category, clue, answer, media \n" +
+			"FROM clues\n" +
+			"JOIN documents ON clues.id = documents.id\n" +
+			"JOIN classifications ON clues.id = classifications.clue_id\n" +
+			"JOIN categories ON classifications.category_id = categories.id\n" +
+			"WHERE clues.game = '" + GAME_ID + "'";
+
+		var queryQuestionsOrder ="SELECT id\n" +
+			"FROM clues\n" +
+			"WHERE game = '" + GAME_ID + "'\n"+
+			"ORDER BY id DESC";
+
+	
+		var round_1_values = [
+			200,
+			400,
+			600,
+			800,
+			1000
+		];
+
+		var round_2_values = [
+					400,
+					800,
+					1200,
+					1600,
+					2000
+		];
+		
+		//check if this question is a Daily Double!
+		
+		var firstRoundDD = Math.floor((Math.random() * 30));
+
+		var secondRoundDD_A = Math.floor((Math.random() * 30));
+
+		var secondRoundDD_B = (function(otherNum){
+			var randomNum = Math.floor((Math.random() * 30));
+			while(randomNum == otherNum){
+				randomNum = Math.floor((Math.random() * 30));
+			}
+			return randomNum;
+		})(secondRoundDD_A);
+
+		db.serialize(function() {
+			db.all(queryQuestionsOrder, function(err, rows){
+				if(err){
+					console.log(err);
+				}else{
+					//calculate question id's for appropriate format
+					last_clue_id = rows[0].id; 
+					first_clue_id = last_clue_id - 60;
+					for (var index = first_clue_id; index<last_clue_id; index++ ){
+						question_object_ids[index] = index - first_clue_id; 
+					}
+
+					var questionRow = 0;
+
+					for (var index=0; index<=60; index++){
+						var question_num = 0;
+						var dailyDouble = false;
+						if (index < 30){
+							if (index == firstRoundDD){
+								dailyDouble = true;
+							}
+							question_object_ids[index+first_clue_id] = {question_id: "J_" + index%6 + "_" + questionRow, value: round_1_values[questionRow], dailyDouble: dailyDouble};
+						}
+						else if(index < 60){
+							if (index - 30 == secondRoundDD_A || index - 30 == secondRoundDD_B)
+							{
+								dailyDouble = true;
+							}
+							question_object_ids[index+first_clue_id] = {question_id: "DJ_" + index%6 + "_" + questionRow, value: round_2_values[questionRow], dailyDouble: dailyDouble};
+						}
+						else{
+							question_object_ids[index+first_clue_id] = {question_id: "FJ_0_0", value: 0, dailyDouble: false};
+						}
+						if((index+1)%6 == 0){
+							questionRow++;
+						}
+						if((index+1) == 30){
+							questionRow = 0;
+						}
+					}
+					console.log("game clue ids: " +  JSON.stringify(question_object_ids));
+					console.log("Last Clue Id: " + last_clue_id);
+				}
+			});
+
+	  		db.all(queryQuestions, function (err, rows) {
+	    		if(err){
+			        console.log(err);
+			    }else{
+			        for (var row in rows){
+			        	//console.log("THIS ROW RAW DATA : " + rows[row]);
+			        	var this_clue_id = rows[row].id;
+			        	var this_question_id = question_object_ids[this_clue_id].question_id;
+			        	var this_clue_media = rows[row].media;
+			        	this_clue_media = this_clue_media.trim();
+			        	//create question, set relevant fields
+			        	var tempQuestion = new Question(rows[row].category, question_object_ids[this_clue_id].value, rows[row].clue, rows[row].answer, question_object_ids[this_clue_id].dailyDouble, question_object_ids[this_clue_id].question_id, this_clue_media, rows[row].round);
+			        	console.log("parsing " + JSON.stringify(tempQuestion));
+			        	var mediaType = parseMediaType(tempQuestion.mediaLink);
+						var answerStrip = parseAnswer(tempQuestion.answer);
+						tempQuestion.answer = answerStrip;
+						tempQuestion.mediaType = mediaType;
+			        	questions[this_question_id] = tempQuestion;
+
+			        	if (tempQuestion.dailyDouble == true){
+			        		console.log("\n THIS QUESTION IS A DAILY DOUBLE: " + tempQuestion.questionId + "\n");
+			        	}
+			        }
+
+			        downloadImages();
+			       console.log("THIS GAMES QUESTIONS: " + JSON.stringify(questions));
+			    }
+			  });
+  		});
+  	}
+
+  	function downloadImages(){
+  		  for(question in questions){
   			var mediaLink = questions[question].mediaLink;
+  			mediaLink = mediaLink.trim();
   			console.log("MEDIA LINK on question loop: /" + mediaLink + "/");
-  			if (!mediaLink.includes("no url"))
+  			if (mediaLink)
   			{
   				var url_img_name = mediaLink;
   				//console.log(JSON.stringify(questions[question]));
   				url_img_name = url_img_name.split("/media/");
   				var filePath = "/temp-media/" +  questions[question].mediaType + "/" + url_img_name[1];
-				if(false/*fs.existsSync(filePath)*/)// check if files already exist in database
+				if(false)
 				{
 					console.log("doesn't need download");
 					questions[question].mediaLink = filePath;
-					gameSpc.emit('game data', {questionID: question, question: questions[question]});
+					gameSpc.emit('game data', {questionID: questions[question].questionId, question: questions[question]});
 				}
 				else
 				{
+					console.log(questions[question]);
 					(function(_question, _filePath, _url_img_name){
 
 						console.log('QUESTION inside fs check ' + _question);
 						console.log('URL_IMG_NAME ' + _url_img_name);
 						console.log('FILE PATH ' + _filePath);
-					  	download(questions[_question].mediaLink, _url_img_name, function(){ //download images, once callback is completed for every image begin game
+					  	download(_question.mediaLink, _url_img_name, function(){ //download images, once callback is completed for every image begin game
 							console.log('done download');
-							questions[_question].mediaLink = _filePath;
-							gameSpc.emit('game data', {questionID: _question, question: questions[_question]});
-						}, questions[_question].mediaType);
-					})(question, filePath, url_img_name[1]);
+							_question.mediaLink = _filePath;
+							gameSpc.emit('game data', {questionID: _question.questionId, question: _question});
+						}, _question.mediaType);
+					})(questions[question], filePath, url_img_name[1]);
 				}
   			}
   			else
 			{
-	  			gameSpc.emit('game data', {questionID: question, question: questions[question]});
+	  			gameSpc.emit('game data', {questionID: questions[question].questionId, question: questions[question]});
 			}
   	 	}
   	}
@@ -1370,8 +1382,7 @@ function closeEnough(playerAnswer, actualAnswer){
 			  		console.log('stopping timer.');
 					stopTimer(questionTimer);
 					//stopTimer(this.int);
-					questionTimesUp();
-					questionTimerCount = 6;
+					//questionTimesUp();
 					questionTimer = null;
 				}
 			}, 1000);
@@ -1387,8 +1398,9 @@ function closeEnough(playerAnswer, actualAnswer){
 
 	function questionTimesUp(){
 	  	 playerSpc.emit('question disappear', curQuestionId);
-	  	 playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
-	  	 gameSpc.emit('active player', {newGame: false, playerName: getPlayerActive()});
+
+  	 	playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
+  	 	gameSpc.emit('active player', {newGame: false, playerName: getPlayerActive()});
 	}
 
 function setPlayerActive(playerActive)
@@ -1445,9 +1457,26 @@ function allPlayersNoAnswer()
   	}
 }
 
-function getGameID()
-{
-	var gameHistorySend = fs.readFileSync(gameHistory, {
+function selectByDecade(decade, callback){
+
+	var useDecade = 201;
+
+	switch(decade){
+		case "80s":
+			useDecade = 198;
+		break;
+		case "90s":
+			useDecade = 199;
+		break;
+		case "00s":
+			useDecade = 200;
+		break;
+		case "10s":
+			useDecade = 201;
+		break;
+	}
+
+		var gameHistorySend = fs.readFileSync(gameHistory, {
   		encoding: 'binary'
 	});
 	// pass in the contents of a csv file
@@ -1461,22 +1490,39 @@ function getGameID()
 		historyArray.push(rowsHistory[rowY][0]);
 	}
 
-	for (var row in rows)
-	{
-		if (row!=0)
-		{
-			var tempGameID = rows[row][0];
-			if(historyArray.indexOf(tempGameID) === -1)//if we can't find the gameID in our existing games played
-			{
-				console.log(rowsHistory);
-				console.log(tempGameID);
-				console.log(rowsHistory.indexOf(tempGameID));
-				return tempGameID;
-			}
-		}
+	db.serialize(function() {
+
+		var queryThisGameId ="SELECT clues.game, airdate\n" +
+			"FROM clues\n" +
+			"JOIN airdates ON clues.game = airdates.game\n" +
+			"WHERE clues.game NOT IN " + iterateThroughArraySQLite(historyArray) + "\n" +
+			"AND airdate LIKE '" + useDecade + "%'\n" +
+			"GROUP BY clues.game\n" +
+			"HAVING count(id) == 61\n" +
+			"ORDER BY RANDOM() LIMIT 1"; 
+
+			console.log(queryThisGameId);
+
+	    db.all(queryThisGameId, function (err, rows) {
+    		if(err){
+		        console.log(err);
+		    }else{
+		        callback(rows[0]);
+		        console.log("THIS GAME ID: " + rows[0].game);
+		    }
+		  });
+	});
+}
+
+function iterateThroughArraySQLite(arrayIterate){
+	var sqliteFormatArray = "(";
+	for (var arrayIndex in arrayIterate){
+		sqliteFormatArray += "'" + arrayIterate[arrayIndex] + "', ";
 	}
-	return 0;
-	
+	sqliteFormatArray = sqliteFormatArray.substring(0, sqliteFormatArray.length - 3); // chop off last two characters
+	sqliteFormatArray += "' )";
+
+	return sqliteFormatArray;
 }
 
 function stopTimer(timer){
@@ -1497,7 +1543,6 @@ function buzzedInBeginCountdown()
 					stopTimer(buzzedInTimer);
 					buzzedInTimer = null;
 					buzzedInTimesUp();
-					var finalJeopardyCheck = false;
 					if (isSecondRound && roundTimer<=0){
 						finalJeopardyCheck = true;
 					}
@@ -1531,13 +1576,8 @@ function buzzedInBeginCountdown()
 					stopTimer(dailyDoubleTimer);
 					dailyDoubleTimer = null;
 					dailyDoubleTimesUp();
-					var finalJeopardyCheck = false;
 					if (isSecondRound && roundTimer<=0){
 						finalJeopardyCheck = true;
-					}
-					if (!finalJeopardyCheck){
-						//playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
-						//gameSpc.emit('active player', {playerName: getPlayerActive(), correct: false});
 					}
 				}
 			}, 1000);
@@ -1549,9 +1589,9 @@ function buzzedInBeginCountdown()
   		var value = questions[curQuestionId]._value;
   		players[getPlayerActive()].score -= value;
 
-  		playerSpc.emit('buzzed in times up', {dailyDouble: questions[curQuestionId].dailyDouble, score: players[getPlayerActive()].score, curQuestionId: curQuestionId, playerName: getPlayerActive(), allPlayersAnswered: true});		
+  		playerSpc.emit('buzzed in times up', {dailyDouble: true/*questions[curQuestionId].dailyDouble*/, score: players[getPlayerActive()].score, curQuestionId: curQuestionId, playerName: getPlayerActive(), allPlayersAnswered: true});		
 													
-  		gameSpc.emit('buzzed in times up', {dailyDouble: questions[curQuestionId].dailyDouble, questionId:curQuestionId, score: players[getPlayerActive()].score, playerName: getPlayerActive(), actualAnswer: questions[curQuestionId]._answer , allPlayersAnswered: true, dailyDoubleWager: questions[curQuestionId]._value});
+  		gameSpc.emit('buzzed in times up', {dailyDouble: true/*questions[curQuestionId].dailyDouble*/, questionId:curQuestionId, score: players[getPlayerActive()].score, playerName: getPlayerActive(), actualAnswer: questions[curQuestionId]._answer , allPlayersAnswered: true, dailyDoubleWager: questions[curQuestionId]._value});
 	}
 
 	function setRoundTimer()
@@ -1561,7 +1601,7 @@ function buzzedInBeginCountdown()
 				gameSpc.emit('update round interval', {roundTimer: roundTimer, round: isSecondRound, activePlayerName: getPlayerActive()});
 				playerSpc.emit('update round interval', roundTimer);
 			}
-			roundTimer--;
+			
 			if (roundTimer == 0) {
 				playerSpc.emit('close category select');
 				if (!isSecondRound){
@@ -1572,5 +1612,6 @@ function buzzedInBeginCountdown()
 				playerSpc.emit('update round interval', roundTimer);
 				isSecondRound = true;
 			}
+			roundTimer--;
 		}, 1000);
 	}

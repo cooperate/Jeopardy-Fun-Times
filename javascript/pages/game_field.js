@@ -2,15 +2,23 @@ $(document).ready(function() {
 
 	class Question
 	{
-		constructor(category, value, question, answer, dailyDouble)
+		constructor(category, value, question, answer, dailyDouble, questionId, mediaLink, round)
 		{
 			this._category = category;
 			this._value = value;
 			this._question = question;
 			this._answer = answer;
 			this._dailyDouble = dailyDouble;
-			this._mediaLink = "no url";
-			this.mediaType = "none";
+			this._questionId = questionId;
+			this._mediaLink = mediaLink;
+			this._mediaType = "none";
+			this._isProperName = false;
+			this._round = round;
+		}
+
+		get round()
+		{
+			return this._round;
 		}
 
 		get category()
@@ -26,6 +34,25 @@ $(document).ready(function() {
 		set question(newQuestion)
 		{
 			this._question = newQuestion;
+		}
+
+		get questionId()
+		{
+			return this._questionId;
+		}
+
+		set questionId(newQuestionId)
+		{
+			this._questionId = newQuestionId;
+		}
+
+		get isProperName()
+		{
+			return this._isProperName;
+		}
+
+		set isProperName(properName){
+			this._isProperName = properName;
 		}
 
 		get answer()
@@ -93,7 +120,6 @@ $(document).ready(function() {
 	var animated = false;
 	var lockPlayers = false;
 	var roundTimer = 600;
-	var questionRead = false;
 	var finalJeopardyThemeEnded = false;
 	var answerTime = 15;
 	const SOUNDS_DIR = "../../game-media/sounds/";
@@ -159,8 +185,7 @@ $(document).ready(function() {
 	
 
 	socket.on('game data', function (data) {
-	    questionList[data.questionID] = new Question(data.question._category, data.question._value, data.question._question, data.question._answer, data.question._dailyDouble);
-	    questionList[data.questionID].mediaLink = data.question._mediaLink;
+	    questionList[data.questionID] = new Question(data.question._category, data.question._value, data.question._question, data.question._answer, data.question._dailyDouble, data.question._questionId, data.question._mediaLink, data.question._round);
 	    questionList[data.questionID].mediaType = data.question._mediaType;
 	    console.log("QUESTION LIST LENGTH: " + Object.keys(questionList).length);
 	    if (Object.keys(questionList).length == 61){
@@ -247,6 +272,7 @@ $(document).ready(function() {
     	var c;
     	for (c=0; c<6; c++)
     	{
+    		console.log("CONTENT BOARD " + roundMarkerId + c + "_" + "_0");
     		contentBoard += "<th>"  +  questionList[roundMarkerId + c + "_0"].category + "</th>";
     		categories.push(questionList[roundMarkerId + c + "_0"].category);
     	}
@@ -264,6 +290,7 @@ $(document).ready(function() {
     		{	
     			if (i>0)
     			{
+    				console.log("CONTENT BOARD " + roundMarkerId + y + "_" + (i-1));
     				contentBoard += "<td id='" + roundMarkerId + y  + "_" + (i-1) + "'>" +  questionList[roundMarkerId + y  + "_" + (i-1)].value + "</td>";
     			}
     		}
@@ -310,80 +337,106 @@ $(document).ready(function() {
 	}
 
 	var newRound = false;
+
+	var nextRoundNeeded = false;
 	//when a new player becomes active
 	socket.on('active player',function(data){
-			
-			var message;
-			if (data.newGame == "new game")
-	   		{
-	   			$('#master_container').css('display', 'block');
-	   			getSoundAndFadeAudio(jeopardyIntroMusic);
-	   			clearInterval(gradientTimer);
-	   			setTimeout(function(){
-	   				$('#game_intro').slideUp("slow", function(){
-	   					$('#game_intro').css('display', 'none');
-		   			  setTimeout(function(){
-			   				animateBoard(true);
-			   				setTimeout(function(){messageToVoice("Hello and welcome to Jeopardy! These are todays categories", false)}, 4000);
-			   				setTimeout(function(){categoryAnimate(data.playerName)}, 7000);
-			   				activePlayerName = data.playerName;
-		   			}, 1000);
-	   			});
-	   			}, 2000);
-	   		}
 
-	   		else
-	   		{
-	   			console.log("ROUND TIMER: " + roundTimer);
-	   			if (roundTimer > 0) //prevent shitty messages to popup if round is over
-	   			{
-	   				console.log(roundTimer);
-					if (activePlayerName == data.playerName)
-					{
-						if (newRound == true)
+			if (roundTimer <= 0)
+			{	
+				console.log("INSIDE ACTIVE PLAYER AFTER ROUND ENDED (this means a question was active while the round timer hit 0)");
+				flashActiveOff(data.playerName);
+				newRound = true;
+				questionIsLive = false;
+				if(nextRoundNeeded == true){
+					console.log("NEXT ROUND SHOULD BE CALLED");
+					nextRound();
+				}
+				nextRoundNeeded = false;
+			}
+
+			else{
+			
+				var message;
+				if (data.newGame == "new game") //handle new game intro animation, show airdate, display intro animation, show categories
+		   		{
+		   			$('#master_container').css('display', 'block');
+		   			getSoundAndFadeAudio(jeopardyIntroMusic);
+		   			clearInterval(gradientTimer);
+		   			$('#airdate_text').text(data.airdate);
+		   			setTimeout(function(){
+		   				$('#game_intro').slideUp("slow", function(){
+		   					playSound(dateSoundEffect);
+			   				$('#game_intro').css('display', 'none');
+		   					setTimeout(function(){
+		   						playSound(openUpSound);
+		   						$('#airdate_screen').slideUp("slow", function(){
+		   							getSoundAndFadeAudio(dateSoundEffect);
+				   					setTimeout(function(){
+						   				animateBoard(true);
+						   				setTimeout(function(){messageToVoice("Hello and welcome to Jeopardy! These are todays categories", false)}, 4000);
+						   				setTimeout(function(){categoryAnimate(data.playerName)}, 7000);
+						   				activePlayerName = data.playerName;
+					   				}, 1000);
+		   						});
+			   				}, 6000);
+				   			  
+			   			});
+		   			}, 2000);
+		   		}
+
+		   		else
+		   		{
+		   			console.log("ROUND TIMER: " + roundTimer);
+		   			if (roundTimer > 0) //prevent shitty messages to popup if round is over
+		   			{
+		   				console.log(roundTimer);
+						if (activePlayerName == data.playerName)
 						{
-							message =  data.playerName + ", you have the board.";
-							newRound = false;
+							if (newRound == true)
+							{
+								message =  data.playerName + ", you have the board.";
+								newRound = false;
+							}
+							else
+							{
+								message =  data.playerName + ", still yours.";
+							}
 						}
 						else
 						{
-							message =  data.playerName + ", still yours.";
+							message =  data.playerName + ", you have the board.";
 						}
-					}
-					else
-					{
-						message =  data.playerName + ", you have the board.";
-					}
-					console.log(message);
-					var openQuestionsSwitch = true;
-					messageToVoice(message, true, function(){ //TODO WHY DOES THIS NEVER GET HERE?  It is probably something to do with googles api failing to finish a voice sequence so the callback never occurs.
-						openQuestionsSwitch = false;
-						console.log("ACTIVE PLAYER MESSAGE FINISHED.");
-						staticMessageOff();
-						hideQuestionField();
-						playSound(chooseCategoryTheme);
-						flashActiveOn(data.playerName);
-						socket.emit('open question category', data.playerName);
-					});
-					setTimeout(function(){ 
-						if (openQuestionsSwitch){
+						console.log(message);
+						var openQuestionsSwitch = true;
+						messageToVoice(message, true, function(){ //TODO WHY DOES THIS NEVER GET HERE?  It is probably something to do with googles api failing to finish a voice sequence so the callback never occurs.
+							openQuestionsSwitch = false;
 							console.log("ACTIVE PLAYER MESSAGE FINISHED.");
 							staticMessageOff();
 							hideQuestionField();
 							playSound(chooseCategoryTheme);
 							flashActiveOn(data.playerName);
 							socket.emit('open question category', data.playerName);
-						}
-					}, 7000);
+						});
+						setTimeout(function(){ 
+							if (openQuestionsSwitch){
+								console.log("ACTIVE PLAYER MESSAGE FINISHED.");
+								staticMessageOff();
+								hideQuestionField();
+								playSound(chooseCategoryTheme);
+								flashActiveOn(data.playerName);
+								socket.emit('open question category', data.playerName);
+							}
+						}, 12000);
+					}
+					else
+					{
+						
+					}
 				}
-				else
-				{
-					flashActiveOff(data.playerName);
-					newRound = true;
-				}
-			}
 			 activePlayerName = data.playerName;
 			 moveActiveIndicator(data.playerName);
+			}
 	 });
 
 	
@@ -395,6 +448,7 @@ $(document).ready(function() {
 	function setRoundTimer(secondRound, roundTimerArg)
 	{
 		roundTimer = roundTimerArg;
+		console.log("ROUND TIMER UPDATE WITH : " + roundTimer);
 		if (!secondRound)
 		{
 
@@ -404,8 +458,6 @@ $(document).ready(function() {
 					if(!questionIsLive)
 					{
 						stopSound(chooseCategoryTheme);
-						nextRound();
-						questionIsLive = false;
 					}
 
 				}
@@ -421,15 +473,36 @@ $(document).ready(function() {
 					{
 						console.log("initiating Final Jeopardy, no question live.");
 						stopSound(chooseCategoryTheme);
-						nextRound();
-						questionIsLive = false;
 					}
 				}
 		}
+
+		if (roundTimer == 0)
+		{
+		
+			if(!questionIsLive)
+			{
+				console.log("QUESTION IS NOT LIVE ROUND TIMER");
+				nextRound();
+				questionIsLive = false;
+			}
+			else{
+				console.log("QUESTION IS LIVE, WAIT FOR ACTIVE PLAYER CALL");
+				nextRoundNeeded = true;
+			}
+
+		}
 	}
+
+	var nextRoundFinalJeopardyCalled = true;
+
+	socket.on('force next round final jeopardy', function(){
+		nextRound();
+	});
 
 	function nextRound()
 	{	
+		console.log("INSIDE NEXT ROUND FUNCTION");
 		var playerNameSingle;
 
 		for(playerNameSingle in playerNames){
@@ -441,12 +514,15 @@ $(document).ready(function() {
 		hideQuestionField();
 		if (finalJeopardyCheck)
 		{
-			playSound(roundOverSound);
-			animationQueue.add_function(function(){
-   				postScreenMessage("Double Jeopardy Round is Over!", false, 0);
-			})
-			socket.emit('final jeopardy started');
-			setTimeout(startFinalJeopardy(), 4000);	
+			if(nextRoundFinalJeopardyCalled){ //should only be called once
+				nextRoundFinalJeopardyCalled = false;
+				playSound(roundOverSound);
+				animationQueue.add_function(function(){
+	   				postScreenMessage("Double Jeopardy Round is Over!", false, 0);
+				})
+				socket.emit('final jeopardy started');
+				setTimeout(startFinalJeopardy(), 4000);
+			}	
 		}
 		else
 		{
@@ -659,7 +735,6 @@ $(document).ready(function() {
 		roundTimer = 600;
 		animated = false;
 		lockPlayers = false;
-		questionRead = false;
 		$("#message_overlay").css("background-color", "rgb(189, 189, 189)");
 		$("#message_overlay").css("color", "rgb(0, 0, 0)");
 		$('#question_field').css('display', 'none');
@@ -687,6 +762,7 @@ $(document).ready(function() {
 
 	//capture question reveal
 	  socket.on('question reveal',function(question){
+	  	timerCount = 6;
 	  	questionIsLive = true;
 	  	$("#" + question.questionId).html('');
 	  	flashActiveOff(question.playerName);
@@ -696,7 +772,6 @@ $(document).ready(function() {
 		  {
 		  	lockPlayers = false;
 		  	//stopTimer(timer);
-		  	timerCount = 6;
 		  	socket.emit('close buzzer');
 		  	draw(1); //for timer animation
 		  	//daily double?
@@ -707,8 +782,10 @@ $(document).ready(function() {
 		 	}
 		 	else //standard question
 		 	{
-		 		questionRead = false;
+		 		var questionRead = false;
+		 		var questionTopRead = false;
 		 		messageToVoice(questionList[question.questionId].category + " for " + questionList[question.questionId].value, true, function(){
+		 			questionTopRead = true;
 		 			displayQuestion(question.question, question.questionId);
 				  	messageToVoice(question.question, true, function(){
 				  		questionRead = true;
@@ -726,10 +803,30 @@ $(document).ready(function() {
 				  	}, 15000);
 		 		});
 
+		 		setTimeout(function(){
+		 			if (questionTopRead == false){
+		 						 			displayQuestion(question.question, question.questionId);
+					  	messageToVoice(question.question, true, function(){
+					  		questionRead = true;
+						  	console.log("question reveal");
+						  	socket.emit('start countdown', question.questionId);
+						  	playSound(questionTheme);
+					  	});
+					  	setTimeout(function(){ //failsafe if message callback never called
+					  		if (questionRead == false)
+					  		{
+							  	console.log("question reveal");
+							  	socket.emit('start countdown', question.questionId);
+							  	playSound(questionTheme);
+					  		}
+					  	}, 15000);
+		 			}
+		 		}, 15000);
+
 		  	}
 		  }
 		  else{
-		  	nextRound();
+		  	//nextRound();
 		  }
 	  });
 
@@ -750,7 +847,7 @@ $(document).ready(function() {
 		  			socket.emit('open submit dd');
 		  			drawTypingPopup(activePlayerName);
 		  		}
-		  	}, 8500);
+		  	}, 15000);
 		  	displayQuestion(question.question, question.questionId);
 		  	staticMessageOff();
 	  });
@@ -759,6 +856,7 @@ $(document).ready(function() {
 	 socket.on('buzzer pressed', function(pressed){
 	 	if(!lockPlayers)
 	 	{
+	 		socket.emit('buzzer pressed confirmed', pressed);
 		 	console.log('buzzer pressed');
 		 	socket.emit('close buzzer');
 		 	flashBuzzer(pressed.playerName);
@@ -782,12 +880,8 @@ $(document).ready(function() {
 	 	{
 	 		socket.emit('close buzzer');
 	 		var msgRsp = score.playerName + " said " + score.answer + " and was correct!";
-	 		if (roundTimer<=0)
- 			{
- 				messageToVoice(msgRsp, true, function(){nextRound()});
- 				postScreenMessage(msgRsp, false, 0);
- 			}
- 			else
+
+ 			if (true)
  			{
  				var msgRead = false;
  				messageToVoice(msgRsp, true, function(){
@@ -844,21 +938,7 @@ $(document).ready(function() {
 		 		}
 	 		}
 	 		
-	   		if (roundTimer<=0)
- 			{
- 				messageToVoice(msgRsp, true, function(){
- 					openQuestionsSwitch = false;
- 					nextRound()
- 				});
- 				postScreenMessage(msgRsp, false, 0);
- 				removeDailyDoubleIcon();
- 				setTimeout(function(){
- 					if (openQuestionsSwitch == true){
- 						nextRound();
- 					}
- 				}, 12000);
- 			}
- 			else
+ 			if(true)
  			{
  				postScreenMessage(msgRsp, false, 0);
  				messageToVoice(msgRsp, true, function(){
@@ -978,7 +1058,7 @@ $(document).ready(function() {
 	//global timers
 
 	socket.on('countdown', function(data){
- 		beginCountdown(data.questionId, data.timerCount);
+ 		//beginCountdown(data.questionId, data.timerCount);  CAUSING GLITCH?
  		socket.emit('open buzzer');
 	});
 
@@ -988,16 +1068,19 @@ $(document).ready(function() {
 
 	//if google api callback fails
 	function forceSocketEmit(socketCall, openQuestionsSwitch){
+		console.log("Open Question Switch parameter sent to forceSocketEmit: " + openQuestionsSwitch);
 		setTimeout(function(){ 
 						if (openQuestionsSwitch){
 							console.log("Google callback failed, force emit.");
 							socketCall;
 						}
-		}, 10000);
+		}, 12000);
 	}
 
 	function beginCountdown(questionId, timerCount)
 	{ 
+		console.log("COUNTDOWN STARTING TIME COUNT IS: " + timerCount);
+		console.log("CURRENTLY TARGETING QUESTION ID: " + questionId);
 		  draw(timerCount/6);
 		  
 		  if (timerCount===0) 
@@ -1009,14 +1092,12 @@ $(document).ready(function() {
 		  		var msgRsp = "The response we were looking for was " + actualAnswer + ".";
 		  		questionIsLive = false;
 		  		
-		   		if (roundTimer<=0)
+		   		if (true)
 	 			{
-	 				messageToVoice(msgRsp, true, function(){nextRound()});
-	 				postScreenMessage(msgRsp, false, 0);
-	 			}
-	 			else
-	 			{
-	 				messageToVoice(msgRsp, true, function(){endCountdown(questionId)});
+	 				messageToVoice(msgRsp, true, function(){
+	 					endCountdown(questionId)
+	 					socket.emit('question timer out');
+	 				});
 	 				postScreenMessage(msgRsp, true, 4000);
 	 				hideQuestionField();
 	 			}
@@ -1130,7 +1211,9 @@ $(document).ready(function() {
 
 	function staticMessageOff()
 	{
-		$('#message_overlay').fadeOut('slow');
+		if(!finalJeopardyCheck){
+			$('#message_overlay').fadeOut('slow');
+		}
 	}
 
     function hideQuestionField()
@@ -1252,6 +1335,9 @@ $(document).ready(function() {
     var jeopardyIntroMusic = document.createElement('audio');
     jeopardyIntroMusic.setAttribute('src', SOUNDS_DIR + 'jeopardy_intro.mp3');
 
+    var dateSoundEffect = document.createElement('audio');
+    dateSoundEffect.setAttribute('src', SOUNDS_DIR + 'radio_tuning.mp3');
+
     var openUpSound = document.createElement('audio');
     openUpSound.setAttribute('src', SOUNDS_DIR + 'open_up.flac');
 
@@ -1348,12 +1434,7 @@ $(document).ready(function() {
 				removeDailyDoubleIcon();
 			}
 	 		
-	 		if (roundTimer<=0)
- 			{
- 				messageToVoice(msgRsp, true, function(){nextRound()});
- 				postScreenMessage(msgRsp, false, 0);
- 			}
- 			else
+	 		if (true)
  			{
  				postScreenMessage(msgRsp, false, 0);
  				var msgRead = false;
@@ -1411,7 +1492,7 @@ $(document).ready(function() {
 				if (!msgRead){
 					msgFunction();
 				}
-			}, 8000);
+			}, 10000);
 
 		}
     });
