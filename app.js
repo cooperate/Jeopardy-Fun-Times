@@ -394,8 +394,14 @@ gameSpc.on('connection', function(socket){
   });
 
   socket.on('open question category', function(playerNameActive){
+  	console.log("Showing Category Select");
   	setPlayerActive(players[playerNameActive]);
   	playerSpc.emit('open question category', playerNameActive);
+  });
+
+  socket.on('next round started', function(){
+  	changeActivePlayerNewRound();
+  	gameSpc.emit('next round start confirmed', getPlayerActive());
   });
 
   //Whenever someone disconnects this piece of code executed
@@ -421,7 +427,7 @@ gameSpc.on('connection', function(socket){
 
   socket.on('final jeopardy bid', function()
   {
-  	playerSpc.emit('final jeopardy bid');
+  	playerSpc.emit('final jeopardy bid', questions["FJ_0_0"]._category);
   });
 
   socket.on('final jeopardy time out', function()
@@ -468,8 +474,9 @@ gameSpc.on('connection', function(socket){
   socket.on('open submit dd', function(){
   	dailyDoubleTimerCount = ANSWER_TIME;
   	dailyDoubleTimer = null;
+  	playerSpc.emit('daily double question finished being read');
   	dailyDoubleBeginCountdown();
-  })
+  });
 
 	//after all messages are done move play to next active player
 
@@ -609,6 +616,7 @@ playerSpc.on('connection', function(socket){
   	questionTimerCount = 6;
   	console.log("QUESTION SELECTED ID: " + questionId);
   	buzzerFlipped = false;
+  	//TODO: pause timer resume when question is received
   	if(roundTimer>0)
   	{
   		questionTimer = null;
@@ -648,7 +656,6 @@ playerSpc.on('connection', function(socket){
 			  questionTimerCount--;
 			  playerSpc.emit('update interval', questionTimerCount);
 			  gameSpc.emit('update interval', questionTimerCount);
-			  console.log('timer count: ' + questionTimerCount);
 			  if (questionTimerCount <= 0) {
 			  		console.log('stopping timer.');
 					stopTimer(questionTimer);
@@ -997,7 +1004,6 @@ playerSpc.on('connection', function(socket){
 	}
 });
 
-//helper functions
 
   	function setGameDataNew(){
   		var last_clue_id = 0;
@@ -1354,7 +1360,7 @@ function closeEnough(playerAnswer, actualAnswer){
 }
 
 	function changeActivePlayerNewRound(){
-		var lowestScore = 99999;
+		var lowestScore = 999999;
 		var playerLow;
 
 		
@@ -1366,7 +1372,7 @@ function closeEnough(playerAnswer, actualAnswer){
 				playerLow = players[player];
 			}
 		}
-		console.log(playerLow);
+		console.log("LOWEST SCORING PLAYER: " + playerLow);
 		setPlayerActive(players[playerLow._name]);
 	}
 
@@ -1377,7 +1383,6 @@ function closeEnough(playerAnswer, actualAnswer){
 			  questionTimerCount--;
 			  playerSpc.emit('update interval', questionTimerCount);
 			  gameSpc.emit('update interval', questionTimerCount);
-			  console.log('timer count: ' + questionTimerCount);
 			  if (questionTimerCount <= 0) {
 			  		console.log('stopping timer.');
 					stopTimer(questionTimer);
@@ -1405,6 +1410,7 @@ function closeEnough(playerAnswer, actualAnswer){
 
 function setPlayerActive(playerActive)
 {
+	console.log("PLAYER ACTIVE " + playerActive);
 	playerActive.isActive = true;
 
 	for (player in players)
@@ -1412,6 +1418,9 @@ function setPlayerActive(playerActive)
 		if (players[player] != playerActive)
 		{
 			players[player].isActive = false;
+		}
+		else{
+			players[player].isActive = true;	
 		}
 	}
 }
@@ -1536,7 +1545,6 @@ function buzzedInBeginCountdown()
 	{
 		if (buzzedInTimer == null){
 			buzzedInTimer = setInterval(function(){
-				console.log("buzzed in timer count: " + buzzedInTimerCount);
 				buzzedInTimerCount--;
 				playerSpc.emit('update buzzer interval', {buzzedInTimerCount: buzzedInTimerCount, buzzedInPlayerName: buzzedInPlayerName});
 	    		if (buzzedInTimerCount === 0) {
@@ -1545,6 +1553,7 @@ function buzzedInBeginCountdown()
 					buzzedInTimesUp();
 					if (isSecondRound && roundTimer<=0){
 						finalJeopardyCheck = true;
+						console.log("FINAL JEOPARDY CHECK TRUE");
 					}
 				}
 			}, 1000);
@@ -1604,13 +1613,15 @@ function buzzedInBeginCountdown()
 			
 			if (roundTimer == 0) {
 				playerSpc.emit('close category select');
-				if (!isSecondRound){
-					changeActivePlayerNewRound();
-				}
 				stopTimer(roundTimerObject);
 				gameSpc.emit('update round interval', {roundTimer: roundTimer, round: isSecondRound, activePlayerName: getPlayerActive()});
 				playerSpc.emit('update round interval', roundTimer);
-				isSecondRound = true;
+				if (isSecondRound && roundTimer<=0){
+					finalJeopardyCheck = true;
+				}
+				if (!isSecondRound){
+					isSecondRound = true;
+				}
 			}
 			roundTimer--;
 		}, 1000);

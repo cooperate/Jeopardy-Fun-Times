@@ -339,7 +339,7 @@ $(document).ready(function() {
 	   });
 
 	   socket.on('close category select', function(){
-			displayCategories(false);
+				displayCategories(false);
 	   });
 
 	   socket.on('open question category new round', function(newRoundActivePlayer){
@@ -528,7 +528,8 @@ $(document).ready(function() {
 	 socket.on('daily double response', function(response){
 	 	if (response.playerName == playerName)
 	 	{
-	 		$(".answer_btn").prop("disabled", true);
+	 		$("#answer_btn").prop("disabled", true);
+	 		$("#answer_btn").css("background-color", "rgb(105,105,105)");
 	 		$("#question_revealed").html(response.question);
 	 		$(".player_bet_field").css("display", "none");
 	 		curQuestionId = response.questionId;
@@ -541,10 +542,14 @@ $(document).ready(function() {
 	 	updateDailyDoubleTimer(data.dailyDoubleTimerCount, data.dailyDoublePlayerName);
 	 });
 
+	 socket.on('daily double question finished being read', function(){
+	 	$("#answer_btn").prop("disabled", false);
+	 	$("#answer_btn").css("background-color", "rgb(255, 204, 2)");
+	 });
+
 	 function updateDailyDoubleTimer(dailyDoubleTimerCount, dailyDoublePlayerName)
 	 {
  		if (playerName == dailyDoublePlayerName){
-	 		$(".answer_btn").prop("disabled", false);
 			
 			drawTimeBlocks(dailyDoubleTimerCount);
 
@@ -554,6 +559,7 @@ $(document).ready(function() {
 					switchBuzzer(true);
 					//hide mobile keyboard
 					$( "#answer_field" ).blur();
+					$('.player_answer_field').css('display', 'none');
 			}
 		}
 	 }
@@ -679,10 +685,11 @@ $(document).ready(function() {
 	 	$("#question_revealed").html("Your Question Will Appear Here");
 	 });
 
-	socket.on('final jeopardy bid', function(){
+	socket.on('final jeopardy bid', function(categoryName){
 		console.log("time to bid");
 	 	endCountdown();
 	 	displayCategories(false);
+	 	$("#question_revealed").html(categoryName);
 		$(".player_buzzer").css("display", "none");
 		$(".player_bet_field").css("display", "block");
 		$("#bet_field" ).focus();
