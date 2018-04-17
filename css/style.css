@@ -221,6 +221,19 @@ body{
     justify-content: center;
 }
 
+
+#message_overlay li{
+	font-family: Optima, Segoe, "Segoe UI", Candara, Calibri, Arial, sans-serif;
+	font-style: normal;
+	font-variant: normal;
+	font-weight: 500;
+	font-size: 70px;
+	padding: 0% 10% 0% 10%;
+    margin: 0;
+	color: white;
+	text-align:center;
+}
+
 #master_container{
 	position:fixed;
 	width:100%;
@@ -273,8 +286,7 @@ body{
 
 #message_overlay h2{
 	font-family:  Arial;
-	font-size: 70px;
-	font-style: bold;
+	font-size: 3em;
 	font-variant: normal;
 	font-weight: 800;
 	padding-left:15%;
@@ -459,7 +471,7 @@ body{
 /* PLAYER BOARD */
 
 .buzzer {
-  padding: 15px 25px;
+  padding: 0 10%;
   font-size: 64px;
   cursor: pointer;
   text-decoration: none;
@@ -501,11 +513,19 @@ body{
 	height:28%;
 }
 
-.player_timer h2{
-	float:left;
+.player_field_info {
+	width: 100%;
+	height: 7%;
+	display: flex;
+	flex-direction: row;
+	justify-content: center;
+	align-items: center;
+}
+.player_field_info h2 {
+	width: 50%;
 }
 .player_question{
- 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /*#3f51b5;*/
+ 	background: #2980b9 url(../game-media/images/static_bg.png) repeat 0 0; /*#3f51b5;*/
  	height: 35%;
 	display:flex;
     align-items: center;
@@ -515,7 +535,6 @@ body{
 .player_question h2, #player_score, #player_name{
 	font-family: Arial, sans-serif;
 	font-size: 35px;
-	font-style: bold;
 	font-variant: normal;
 	font-weight: 800;
 	padding-left:15%;
@@ -533,7 +552,7 @@ body{
 
 .player_buzzer{
 	 text-align: center;
-	 height: 35%;
+	 height: 30%;
 }
 
 #answer_field, #bet_field{
@@ -628,15 +647,15 @@ body{
 	}
 }
 
-/*phones
-@media only screen and (max-width: 480px), only screen and (max-device-width: 480px) {
+/*phones*/
+@media only screen and (max-width: 767px), only screen and (max-device-width: 767px) {
    	#game_board tr:not(:first-child) td{
-		font-size:18px;
+		font-size:30px;
+	}
+	#game_board tr:first-child th{
+		font-size: 1em;
 	}
 
-	#tempGAME tr:not(:first-child) td{
-		font-size:35px;
-	}
 	#answer_field
 	{
 		font-size: 30px;
@@ -646,7 +665,30 @@ body{
 	{
 		font-size:30px;
 	}
-}*/
+	#message_overlay h2
+	{
+		font-size: 3em;
+	}
+	#timer_table
+	{
+		height: 100%;
+	}
+	#question_relvealed
+	{
+		font-size: 1em;
+	}
+
+	#bet_field, #bet_button {
+		font-size: 2em;
+	}
+	.player_question h2
+	{
+		font-size:1em;
+	}
+	#player_name, #player_score {
+		font-size: 1em;
+	}
+}
 
 /*ANIMATIONS*/
 
