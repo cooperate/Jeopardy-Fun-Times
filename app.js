@@ -42,6 +42,7 @@ var curActivePlayer; //player who holds the current lead for picking questions
 var file = __dirname + '/data/JEOPARDY_CSV_test.csv';
 var lastNameFile = __dirname + '/data/last_name_stripped.csv';
 var gameHistory = __dirname + '/data/games_played.csv';
+var gameHighScore = __dirname + '/data/game_high_score.csv';
 var buzzerFlipped = false;
 var buzzedInPlayerName;  //tracks player currently answering questions
 
@@ -394,8 +395,14 @@ gameSpc.on('connection', function(socket){
   });
 
   socket.on('open question category', function(playerNameActive){
+  	console.log("Showing Category Select");
   	setPlayerActive(players[playerNameActive]);
   	playerSpc.emit('open question category', playerNameActive);
+  });
+
+  socket.on('next round started', function(){
+  	changeActivePlayerNewRound();
+  	gameSpc.emit('next round start confirmed', getPlayerActive());
   });
 
   //Whenever someone disconnects this piece of code executed
@@ -421,7 +428,7 @@ gameSpc.on('connection', function(socket){
 
   socket.on('final jeopardy bid', function()
   {
-  	playerSpc.emit('final jeopardy bid');
+  	playerSpc.emit('final jeopardy bid', questions["FJ_0_0"]._category);
   });
 
   socket.on('final jeopardy time out', function()
@@ -429,10 +436,51 @@ gameSpc.on('connection', function(socket){
   	playerSpc.emit('final jeopardy time out');
   });
 
-    socket.on('game over', function(winningPlayerName){
+    socket.on('game over', function(winningPlayerData){
     	fs.appendFileSync(gameHistory, '\n' + GAME_ID);
-    	playerSpc.emit('game over', winningPlayerName);
+    	fs.appendFileSync(gameHighScore, '\n' + winningPlayerData.winningPlayerName + ',' + winningPlayerData.winningPlayerScore);
+    	playerSpc.emit('game over', winningPlayerData.winningPlayerName);
     });
+
+    socket.on('fetch high scores', function(){
+    	var highScores = findHighScores();
+    	gameSpc.emit('high scores', highScores);
+    });
+
+    function findHighScores(){
+    	var gameHighScoreSend = fs.readFileSync(gameHighScore, {
+  			encoding: 'binary'
+		});
+		// pass in the contents of a csv file
+		var parsedHighScore = Baby.parse(gameHighScoreSend);
+	// voila
+		var rowsHighScore = parsedHighScore.data;
+
+		var highScoreArray = new Array();
+
+		for(var row in rowsHighScore){
+			var score=rowsHighScore[row][1];
+			var name=rowsHighScore[row][0];
+			if (row==0){
+				highScoreArray.push({name: name, score: score});
+				
+			}else{
+				if(score<highScoreArray[0].score){
+					highScoreArray.unshift({name: name, score:score});
+				}else{			
+					var indexCounter = highScoreArray.length - 1;	
+					while(score<highScoreArray[indexCounter].score){
+						indexCounter--;
+					}
+					highScoreArray.splice( indexCounter, 0, {name:name, score:score});
+				}
+			}
+		}
+		
+		highScoreArray.reverse();
+
+		return highScoreArray;
+    }
 
    console.log("Master Screen Connected");
 
@@ -468,8 +516,9 @@ gameSpc.on('connection', function(socket){
   socket.on('open submit dd', function(){
   	dailyDoubleTimerCount = ANSWER_TIME;
   	dailyDoubleTimer = null;
+  	playerSpc.emit('daily double question finished being read');
   	dailyDoubleBeginCountdown();
-  })
+  });
 
 	//after all messages are done move play to next active player
 
@@ -609,6 +658,7 @@ playerSpc.on('connection', function(socket){
   	questionTimerCount = 6;
   	console.log("QUESTION SELECTED ID: " + questionId);
   	buzzerFlipped = false;
+  	//TODO: pause timer resume when question is received
   	if(roundTimer>0)
   	{
   		questionTimer = null;
@@ -648,7 +698,6 @@ playerSpc.on('connection', function(socket){
 			  questionTimerCount--;
 			  playerSpc.emit('update interval', questionTimerCount);
 			  gameSpc.emit('update interval', questionTimerCount);
-			  console.log('timer count: ' + questionTimerCount);
 			  if (questionTimerCount <= 0) {
 			  		console.log('stopping timer.');
 					stopTimer(questionTimer);
@@ -744,6 +793,16 @@ playerSpc.on('connection', function(socket){
 			actualAnswer = actualAnswer.substring(2, actualAnswer.length);
 			actualAnswer.trim();
 		}
+
+		tempINGAnswerSearch = actualAnswer.substring(actualAnswer.length-4);
+		tempINGPlayerAnswerSearch = actualAnswer.substring(actualAnswer.length-4);
+
+		if(tempINGAnswerSearch == "ING"){
+			actualAnswer = actualAnswer.substring(0, actualAnswer.length-4);
+		}
+		if(tempINGPlayerAnswerSearch == "ING"){
+			playerAnswer = playerAnswer.substring(0, playerAnswer.length-4);
+		}
 		
 		//remove what is, who is, who are, the
 		var regexCommon = new RegExp("^\\b(WHAT IS|WHO IS|WHO ARE|WHAT ARE|WHAT IS|WHO IS A|WHO ARE A|WHAT ARE A|WHAT IS A|LIKE A| LIKE)\\b", "g"); 
@@ -779,18 +838,6 @@ playerSpc.on('connection', function(socket){
 		console.log("Player Answer before name check: " + playerAnswer);
 		var playerAnswerArrayTemp = playerAnswer.split(" ");
 		console.log(playerAnswerArrayTemp.length);
-		if (playerAnswerArrayTemp.length == 1){
-			console.log("THIS IS A PROPER NAME");
-			isName = checkIfName(playerAnswer);
-		}
-
-		if (isName){
-			actualAnswerArray = actualAnswer.split(" ");
-			console.log("Actual Answer Last Name:" + actualAnswerArray[actualAnswerArray.length-1]);
-			if(playerAnswer == actualAnswerArray[actualAnswerArray.length-1]){
-				skimmedAnswer = true;
-			}		
-		}
 		
 		tempPlayerAnswerSearch = playerAnswer.substring(0, 3);
 
@@ -851,6 +898,7 @@ playerSpc.on('connection', function(socket){
 				}
 			}
 		}*/
+
 		var answerObject = checkForPlural(playerAnswer, actualAnswer);
 
 		actualAnswer = answerObject.actualAnswer;
@@ -858,7 +906,7 @@ playerSpc.on('connection', function(socket){
 		playerAnswer = answerObject.playerAnswer;
 
 		console.log("player answer after plural check: " + playerAnswer);
-		var answerCount = 0;
+		
 
 		console.log("player Array length: " + playerAnswer.length);
 		console.log("answer Array length: " + actualAnswer.length);
@@ -880,28 +928,99 @@ playerSpc.on('connection', function(socket){
 		console.log("player Array length: " + playerAnswer.length);
 		console.log("answer Array length: " + actualAnswer.length);
 
+		var actualAnswer = actualAnswer.filter(function(x) { 
+  			return badWords.indexOf(x) < 0;
+		});
+
+		var playerAnswer = playerAnswer.filter(function(x) { 
+  			return badWords.indexOf(x) < 0;
+		}); 
+
+		console.log("removed bad words from answer : " + actualAnswer + "\n removed bad words from player answer: " + playerAnswer);
+		
+		if (actualAnswer.length <= 3){
+			console.log("THIS MIGHT BE A PROPER NAME");
+			if(actualAnswer.length==3){
+				isName = checkIfName(actualAnswer[2]);
+			}else if(actualAnswer.length==2){
+				isName = checkIfName(actualAnswer[1]);
+			}else if(actualAnswer.length==1){
+				isName = checkIfName(actualAnswer[0]);
+			}
+		}
+
+		if (isName){
+			if(playerAnswer.length == 1){
+				if(actualAnswer.length==1){
+					if(playerAnswer[0] == actualAnswer[0]){
+						skimmedAnswer = true;
+					}	
+				}else if(actualAnswer.length==2){
+					if(playerAnswer[0] == actualAnswer[1]){
+						skimmedAnswer = true;
+					}	
+				}
+			}else if(playerAnswer.length == 2){
+				if(actualAnswer.length==1){
+					if(playerAnswer[1] == actualAnswer[0]){
+						skimmedAnswer = true;
+					}	
+				}else if(actualAnswer.length==2){
+					if(playerAnswer[1] == actualAnswer[1]){
+						skimmedAnswer = true;
+					}	
+				}
+			}else if(playerAnswer.length == 3){
+				if(actualAnswer.length==1){
+					if(playerAnswer[1] == actualAnswer[0]){
+						skimmedAnswer = true;
+					}	
+				}else if(actualAnswer.length==2){
+					if(playerAnswer[1] == actualAnswer[1]){
+						skimmedAnswer = true;
+					}	
+				}else if(actualAnswer.length==3){
+					if(playerAnswer[2] == actualAnswer[2]){
+						skimmedAnswer = true;
+					}	
+				}
+			}	
+		}
+
 		//search to see if any meaningful words match from the actual answer and the players answer, excluding a set of "bad" words (pronouns, conjugates etc.)
-		for (var word in actualAnswer){
-			if (badWords.indexOf(actualAnswer[word]) == -1){
+		var answerCount = 0;
+		if(!isName){
+			for (var word in actualAnswer){
 				for(var wordY in playerAnswer){
 					console.log("PLAYER ANSWER CHECK: " + playerAnswer[wordY] + "ACTUAL ANSWER CHECK: "+ actualAnswer[word]);
-					if(playerAnswer[wordY] == actualAnswer[word] && isName == false){
+					if(playerAnswer[wordY] == actualAnswer[word]){
 						console.log("WORD THAT WAS CONFIRMED CORRECT: " + actualAnswer[word]);
 						//if (!andAnswer){
-							skimmedAnswer = true;
-							break;
+							//skimmedAnswer = true;
+							//break;
 						//}
 						//else
 						//{
-							//answerCount++;
+							answerCount++;
 						//}
 					}
 				}
 			}
 		}
 
-		if (answerCount >= 2){ 
+		if (answerCount >= 2 && actualAnswer.length>2){ 
 			skimmedAnswer = true;
+		}
+		if (answerCount>=1 && actualAnswer.length==2){
+			skimmedAnswer = true;
+		}
+		if(answerCount==1  && actualAnswer.length==1){
+			skimmedAnswer = true;
+		}
+		console.log("player answer length: " + playerAnswer.length + " actual answer length: " + actualAnswer.length);
+		console.log("actual answer plus 1: " + (actualAnswer.length + 1));
+		if(playerAnswer.length > (actualAnswer.length + 1)){
+			skimmedAnswer = false;
 		}
 
 		/*if(checkForPlural(playerAnswer, actualAnswer))
@@ -997,7 +1116,6 @@ playerSpc.on('connection', function(socket){
 	}
 });
 
-//helper functions
 
   	function setGameDataNew(){
   		var last_clue_id = 0;
@@ -1178,6 +1296,7 @@ function checkIfName(playerNameToCheck){
 	// voila
 	var rowsLastName = parsedLastName.data;
 
+	console.log("checking name");
 	//if (rowsLastName.indexOf(playerNameToCheck) != -1){
 	for(var row in rowsLastName){
 		if (playerNameToCheck == rowsLastName[row][0]){
@@ -1354,7 +1473,7 @@ function closeEnough(playerAnswer, actualAnswer){
 }
 
 	function changeActivePlayerNewRound(){
-		var lowestScore = 99999;
+		var lowestScore = 999999;
 		var playerLow;
 
 		
@@ -1366,7 +1485,7 @@ function closeEnough(playerAnswer, actualAnswer){
 				playerLow = players[player];
 			}
 		}
-		console.log(playerLow);
+		console.log("LOWEST SCORING PLAYER: " + playerLow);
 		setPlayerActive(players[playerLow._name]);
 	}
 
@@ -1377,7 +1496,6 @@ function closeEnough(playerAnswer, actualAnswer){
 			  questionTimerCount--;
 			  playerSpc.emit('update interval', questionTimerCount);
 			  gameSpc.emit('update interval', questionTimerCount);
-			  console.log('timer count: ' + questionTimerCount);
 			  if (questionTimerCount <= 0) {
 			  		console.log('stopping timer.');
 					stopTimer(questionTimer);
@@ -1405,6 +1523,7 @@ function closeEnough(playerAnswer, actualAnswer){
 
 function setPlayerActive(playerActive)
 {
+	console.log("PLAYER ACTIVE " + playerActive);
 	playerActive.isActive = true;
 
 	for (player in players)
@@ -1412,6 +1531,9 @@ function setPlayerActive(playerActive)
 		if (players[player] != playerActive)
 		{
 			players[player].isActive = false;
+		}
+		else{
+			players[player].isActive = true;	
 		}
 	}
 }
@@ -1536,7 +1658,6 @@ function buzzedInBeginCountdown()
 	{
 		if (buzzedInTimer == null){
 			buzzedInTimer = setInterval(function(){
-				console.log("buzzed in timer count: " + buzzedInTimerCount);
 				buzzedInTimerCount--;
 				playerSpc.emit('update buzzer interval', {buzzedInTimerCount: buzzedInTimerCount, buzzedInPlayerName: buzzedInPlayerName});
 	    		if (buzzedInTimerCount === 0) {
@@ -1545,6 +1666,7 @@ function buzzedInBeginCountdown()
 					buzzedInTimesUp();
 					if (isSecondRound && roundTimer<=0){
 						finalJeopardyCheck = true;
+						console.log("FINAL JEOPARDY CHECK TRUE");
 					}
 				}
 			}, 1000);
@@ -1604,13 +1726,15 @@ function buzzedInBeginCountdown()
 			
 			if (roundTimer == 0) {
 				playerSpc.emit('close category select');
-				if (!isSecondRound){
-					changeActivePlayerNewRound();
-				}
 				stopTimer(roundTimerObject);
 				gameSpc.emit('update round interval', {roundTimer: roundTimer, round: isSecondRound, activePlayerName: getPlayerActive()});
 				playerSpc.emit('update round interval', roundTimer);
-				isSecondRound = true;
+				if (isSecondRound && roundTimer<=0){
+					finalJeopardyCheck = true;
+				}
+				if (!isSecondRound){
+					isSecondRound = true;
+				}
 			}
 			roundTimer--;
 		}, 1000);
