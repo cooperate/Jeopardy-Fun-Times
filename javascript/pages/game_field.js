@@ -568,11 +568,12 @@ $(document).ready(function() {
 		//change message color
 		$("#message_overlay").css("background-color", "rgb(63, 81, 181)");
 		$("#message_overlay").css("color", "rgb(255, 255, 255)");
-		postScreenMessage("", false, 5000);
+		postScreenMessage("", false, 0);
 		var message = "Here is tonights Final Jeopardy Category: ";
 		messageToVoice(message, false);
 		setTimeout(function(){
 			playSound(finalJeopardyBloop);
+			stopSound(chooseCategoryTheme);
 			$("#message_overlay").html("<h2>" + questionList["FJ_0_0"].category + "</h2>");
 			messageToVoice(questionList["FJ_0_0"].category, false);
 			messageToVoice("Please make your wager.", true, function(){socket.emit('final jeopardy bid')});
@@ -705,7 +706,7 @@ $(document).ready(function() {
 									    playSound(jeopardyIntroMusic);
 									}, 4000);
 
-								socket.emit('game over', winnerPlayer.playerName);
+								socket.emit('game over', {winningPlayerName: winnerPlayer.playerName, winningPlayerScore: winnerPlayer.score});
 							}
 							else
 							{
@@ -713,8 +714,12 @@ $(document).ready(function() {
 								postScreenMessage("You win " + winnerPlayer.playerName + "!", false, 0);
 							    jeopardyIntroMusic.volume = 1;
 							    playSound(jeopardyIntroMusic);
-							    socket.emit('game over', winnerPlayer.playerName);
+							    socket.emit('game over', {winningPlayerName: winnerPlayer.playerName, winningPlayerScore: winnerPlayer.score});
 							}
+
+							setTimeout(function(){
+								socket.emit('fetch high scores');
+							}, 10000);
 
 						  });
 		    		}
@@ -722,6 +727,21 @@ $(document).ready(function() {
 	    	});	
     	});
     }
+
+    socket.on('high scores', function(highScores){
+    	console.log("HIGH SCORES : " + JSON.stringify(highScores));
+    	var scoreCounter = 0;
+    	$("#message_overlay").html("");
+    	var highScoreTag = "<div><h2>HIGH SCORES</h2><ol>"
+    	for (var playerVal in highScores) {
+    		if(scoreCounter<10){
+    			highScoreTag += "<li>" + highScores[playerVal].name + " " + highScores[playerVal].score +  "</li>";
+    			scoreCounter++;
+    		}
+    	}
+    	highScoreTag += "</ol></div>";
+    	$("#message_overlay").append(highScoreTag);
+    });
 
     socket.on('new game', function(){
     	questionList.length = 0;
@@ -791,7 +811,7 @@ $(document).ready(function() {
 		 	{
 		 		var questionRead = false;
 		 		var questionTopRead = false;
-		 		messageToVoice(questionList[question.questionId].category + " for " + questionList[question.questionId].value, true, function(){
+		 		messageToVoice(questionList[question.questionId].category.toLowerCase() + " for " + questionList[question.questionId].value, true, function(){
 		 			questionTopRead = true;
 		 			displayQuestion(question.question, question.questionId);
 				  	messageToVoice(question.question, true, function(){
@@ -853,7 +873,7 @@ $(document).ready(function() {
 		  			socket.emit('open submit dd');
 		  			drawTypingPopup(activePlayerName);
 		  		}
-		  	}, 15000);
+		  	}, 18000);
 		  	displayQuestion(question.question, question.questionId);
 		  	staticMessageOff();
 	  });
@@ -1098,20 +1118,22 @@ $(document).ready(function() {
 		  		questionIsLive = false;
 		  		var question_read = false;
 		  		console.log("timer count for countdown");
+		  		postScreenMessage(msgRsp, false, 0);
  				messageToVoice(msgRsp, true, function(){
  					question_read = true;
  					endCountdown(questionId);
  					socket.emit('question timer out');
+ 					staticMessageOff();
  					console.log("QUESTION TIMER OUT SOCKET EMIT");
  				});
  				setTimeout(function(){ 
 						if (question_read==false){
 							endCountdown(questionId);
- 							socket.emit('question timer out');
+							socket.emit('question timer out');
+							staticMessageOff();
  							console.log("QUESTION TIMER OUT SOCKET EMIT (GOOGLE SPEECH API FAIL)");
 						}
 				}, 12000);
- 				postScreenMessage(msgRsp, true, 4000);
  				hideQuestionField();
 		  }
 	}
@@ -1140,16 +1162,27 @@ $(document).ready(function() {
 			switch(questionList[questionId].mediaType)
 			{
 				case "image":
-					//getImageGoogle(questionList[questionId].answer);
-					$("#question_field #image_container").html("<img id='question_image' alt='no image available' src=" + mediaLink + ">");
+					getImageGoogle(questionList[questionId].answer);
+					//$("#question_field #image_container").html("<img id='question_image' alt='no image available' src=" + mediaLink + ">");
+					break;
+				case "video":
+					getImageGoogle(questionList[questionId].answer);
+					break;
+				case "video_mp4":
+					getImageGoogle(questionList[questionId].answer);
+					break;
+				case "video_wmv":
+					getImageGoogle(questionList[questionId].answer);
 					break;
 				case "audio":
-					var audioClip = new Audio();
+					getImageGoogle(questionList[questionId].answer);
+					break;
+					/*var audioClip = new Audio();
 			        audioClip.src = mediaLink;
 			        audioClip.addEventListener('load', function () {
 			        	//musicAnimate();
 			            audioClip.play();
-			        });
+			        });*/
 				default:
 			}
 		}
@@ -1158,8 +1191,8 @@ $(document).ready(function() {
 	//use google api to match the first search result from an answer
 	//disabled this, not sharing api key!
 	function getImageGoogle(questionAnswer){
-		var cx = "";
-		var key = "";
+		var cx = "016302290608621917336:pnx9tnn9lwa";
+		var key = "AIzaSyDfW8Ds1xfJZwGBJW3jgSWrdAzi6HYzfxk";
 		var searchType = "image";
 		var num = 1;
 		var searchURL = "https://www.googleapis.com/customsearch/v1?key=" + key + "&cx=" + cx + "&q=" + questionAnswer + "&num=" + num + "&searchType=" + searchType;
@@ -1268,7 +1301,7 @@ $(document).ready(function() {
     		speed:    100,
     		timeout: 3000,
     		after: function(){
-    			messageToVoice(categories[index], false);
+    			messageToVoice(categories[index].toLowerCase(), false);
     			index++;
     		},
     		height: 'auto',
