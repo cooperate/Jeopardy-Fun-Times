@@ -108,8 +108,8 @@ $(document).ready(function() {
 	  			$('#join_btn').prop('disabled',true);
 	  			socket.emit('login name', loginNameStripped);
 	  			playerName = loginNameStripped;
-	  			$(".player_timer").append("<h2 id='player_name'>" + playerName + "</h2>");
-	  			$(".player_timer").append("<h2 id='player_score'>0</h2>");
+	  			$(".player_field_info").append("<h2 id='player_name'>" + playerName + "</h2>");
+	  			$(".player_field_info").append("<h2 id='player_score'>0</h2>");
         	}
         	return false;
       });
@@ -824,7 +824,7 @@ $(document).ready(function() {
 	 	var validationObject = validateBet(value);
 	 	if (validationObject.isValid)
 	 	{	
-	 		socket.emit('bet selection', {betValue: value, questionId: curQuestionId, playerName: playerName, finalJeopardyCheck: finalJeopardyCheck});
+	 		socket.emit('bet selection', {betValue: value, questionId: curQuestionId, playerName: playerName, finalJeopardyCheck: finalJeopardyCheck}); //final jeopardy check is only triggered after final jeopardy segment begins (not to be confused with final jeopardy triggering ie. the game timer runs out while a daily double occurs)
 	 		$('#bet_field').val('');
 	 	}
 	 	else
