@@ -182,6 +182,21 @@ $(document).ready(function() {
 
 	var socket = io('/game');
 
+	var resumeAudioContext = function() {
+		// handler for fixing suspended audio context in Chrome
+		try {
+			if (createjs.WebAudioPlugin.context.state === "suspended") {
+				createjs.WebAudioPlugin.context.resume();
+				// Should only need to fire once
+				window.removeEventListener("click", resumeAudioContext);
+			}
+		} catch (e) {
+			// SoundJS context or web audio plugin may not exist
+			console.error("There was an error while trying to resume the SoundJS Web Audio context...");
+			console.error(e);
+		}
+	};
+	window.addEventListener("click", resumeAudioContext);
 	
 
 	socket.on('game data', function (data) {
