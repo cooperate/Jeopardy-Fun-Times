@@ -182,23 +182,6 @@ $(document).ready(function() {
 
 	var socket = io('/game');
 
-	var resumeAudioContext = function() {
-		// handler for fixing suspended audio context in Chrome
-		try {
-			if (createjs.WebAudioPlugin.context.state === "suspended") {
-				createjs.WebAudioPlugin.context.resume();
-				// Should only need to fire once
-				window.removeEventListener("click", resumeAudioContext);
-			}
-		} catch (e) {
-			// SoundJS context or web audio plugin may not exist
-			console.error("There was an error while trying to resume the SoundJS Web Audio context...");
-			console.error(e);
-		}
-	};
-	window.addEventListener("click", resumeAudioContext);
-	
-
 	socket.on('game data', function (data) {
 	    questionList[data.questionID] = new Question(data.question._category, data.question._value, data.question._question, data.question._answer, data.question._dailyDouble, data.question._questionId, data.question._mediaLink, data.question._round);
 	    questionList[data.questionID].mediaType = data.question._mediaType;
@@ -1389,11 +1372,12 @@ $(document).ready(function() {
 	}
 
 	//SOUNDS
-	var timesUpSound = document.createElement('audio');
-    timesUpSound.setAttribute('src', SOUNDS_DIR + 'times_up.mp3');
-
     var jeopardyIntroMusic = document.createElement('audio');
     jeopardyIntroMusic.setAttribute('src', SOUNDS_DIR + 'jeopardy_intro.mp3');
+    jeopardyIntroMusic.setAttribute('class', 'init-audio');
+
+	var timesUpSound = document.createElement('audio');
+    timesUpSound.setAttribute('src', SOUNDS_DIR + 'times_up.mp3');
 
     var dateSoundEffect = document.createElement('audio');
     dateSoundEffect.setAttribute('src', SOUNDS_DIR + 'radio_tuning.mp3');
@@ -1435,6 +1419,27 @@ $(document).ready(function() {
 
     var boardFillSound = document.createElement( 'audio');
     boardFillSound.setAttribute('src', SOUNDS_DIR + 'board_fill.mp3');
+
+	if (promise !== undefined) {
+	  promise.then(_ => {
+	    // Autoplay started!
+	    console.log("Autoplay started!");
+	  }).catch(error => {
+	  	console.log("Autoplay failed to iniate.  Please click anywhere on screen.");
+		window.addEventListener("click", resumeAudioContext);
+	  });
+	}
+	var resumeAudioContext = function() {
+		// handler for fixing suspended audio context in Chrome
+		try {
+			console.log("Clicked screen, game should iniate.");
+			window.removeEventListener("click", resumeAudioContext);
+		} catch (e) {
+			// SoundJS context or web audio plugin may not exist
+			console.error("There was an error while trying to resume the Web Audio context...");
+			console.error(e);
+		}
+	};
 
     //loop the theme if it ends
     jeopardyIntroMusic.addEventListener('ended', function() {
@@ -1608,7 +1613,7 @@ $(document).ready(function() {
     	soundName.play();
     }
 
-    playSound(jeopardyIntroMusic);
+    var promise = playSound(jeopardyIntroMusic);
 
     function stopSound(soundName)
     {
@@ -1744,5 +1749,3 @@ $(document).ready(function() {
 		}, 100);
 	}
 });	
-
-
