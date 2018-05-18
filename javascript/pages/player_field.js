@@ -7,7 +7,8 @@ $(document).ready(function() {
 		console.log("PROMISES DON'T WORK :(");
 	}
 
-	var playerName;
+	var roundTimer = 600;
+	var playerName = null;
 	var playerScore = 0;
 	var activePlayerName;
 	var curQuestionId = '';
@@ -50,11 +51,29 @@ $(document).ready(function() {
 		}
 	}
 
+	socket.on('update-state-reload', function(gameState){
+		console.log(gameState);
+		if(playerName == null){
+			playerName = gameState['player-name'];
+			playerScore = gameState['players'];
+			activePlayerName = gameState['active-player-name'];
+			finalJeopardyCheck = gameState['final-jeopardy-check'];
+			$("#login_container").css('display', 'none');
+			$(".player_field").css('display', 'block');
+			staticMessageOff();
+		   	displayCategories(true);
+	   }
+	});
+
 	socket.on('update buzzer interval', function(buzzerTimeData){
 		if (buzzerTimeData.buzzedInPlayerName == playerName)
 		{
 			beginCountdown(buzzerTimeData.buzzedInTimerCount);
 		}
+	});
+
+	socket.on('next round start confirmed', function(activePlayerReceive){
+		activePlayerName = activePlayerReceive;
 	});
 
 	function endCountdown()
@@ -275,7 +294,7 @@ $(document).ready(function() {
 	  	answerTime = answerTimeData;
 	  });
 
-	  var roundTimer = 600;
+	  
 
 	  //capture player active 
 	   socket.on('active player',function(data){

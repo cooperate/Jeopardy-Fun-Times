@@ -125,6 +125,9 @@ $(document).ready(function() {
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR = "../../game-media/images/";
 
+	//Speech Synthesis
+	var synth = window.speechSynthesis;
+
 	var Queue = (function(){
 
 		    function Queue() {};
@@ -504,7 +507,7 @@ $(document).ready(function() {
 	socket.on('next round start confirmed', function(activePlayerReceive){
 		activePlayerName = activePlayerReceive;
 		nextRoundOrdered();
-	})
+	});
 
 	function nextRoundOrdered(){
 		for(playerNameSingle in playerNames){
@@ -1570,7 +1573,7 @@ $(document).ready(function() {
     //read question aloud
     function messageToVoice(message, needsCallback, callback)
     {
-        var arr = [];
+        /*var arr = [];
         var element = this;
         var txt = message;
         var voices = window.speechSynthesis.getVoices();
@@ -1587,7 +1590,6 @@ $(document).ready(function() {
             u.voice = voices[3]; // Note: some voices don't support altering params
 			u.rate = 0.9; // 0.1 to 10
             window.speechSynthesis.speak(u);
-
         });
 
         if (needsCallback)
@@ -1599,11 +1601,26 @@ $(document).ready(function() {
 			    callback();
 			};
 		}
+		*/
     	/*var msg = new SpeechSynthesisUtterance(message);
     	var voices = window.speechSynthesis.getVoices();
 		msg.voice = voices[3]; // Note: some voices don't support altering params
 		msg.rate = 0.9; // 0.1 to 10
 		window.speechSynthesis.speak(msg);*/
+
+		var voices = synth.getVoices();
+		var utterThis = new SpeechSynthesisUtterance(message);
+		utterThis.voice = voices[4];
+		utterThis.pitch = 1;
+		utterThis.rate = 0.9;
+		synth.speak(utterThis);
+
+		if (needsCallback)
+		{
+			utterThis.onend = function (event) {
+			    callback();
+			};
+		}
     }
 
     function playSound(soundName)
