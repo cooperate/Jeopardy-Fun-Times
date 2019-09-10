@@ -650,7 +650,7 @@ body{
 /*phones*/
 @media only screen and (max-width: 767px), only screen and (max-device-width: 767px) {
    	#game_board tr:not(:first-child) td{
-		font-size:30px;
+		font-size: 25px;
 	}
 	#game_board tr:first-child th{
 		font-size: 1em;
@@ -687,6 +687,15 @@ body{
 	}
 	#player_name, #player_score {
 		font-size: 1em;
+	}
+}
+
+@media only screen and (max-width: 320px), only screen and (max-device-width: 320px) {
+	#game_board tr:first-child th{
+		font-size: 0.7em;
+	}
+	#game_board tr:not(:first-child) td{
+		font-size:20px;
 	}
 }
 
