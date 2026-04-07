@@ -5,6 +5,7 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "openai": "^6.33.0",
     "papaparse": "^5.4.1",
     "socket.io": "^1.7.3",
     "sqlite3": "^5.1.7",
