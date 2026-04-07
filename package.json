@@ -8,8 +8,7 @@
     "openai": "^6.33.0",
     "papaparse": "^5.4.1",
     "socket.io": "^1.7.3",
-    "sqlite3": "^5.1.7",
-    "sweetalert2": "^6.11.5"
+    "sqlite3": "^5.1.7"
   },
   "scripts": {
     "start": "node app.js"

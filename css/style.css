@@ -1,7 +1,9 @@
 /* GAME BOARD */
+@import url(zain-fonts.css);
 
 body{
 	margin: 0 !important;
+	font-family: 'Zain', system-ui, -apple-system, sans-serif;
 }
 #game_container
 {
@@ -98,7 +100,8 @@ body{
 }
 
 .host-round-timer__label {
-	font-family: Impact, Charcoal, sans-serif;
+	font-family: 'Zain', sans-serif;
+	font-weight: 700;
 	font-size: 13px;
 	letter-spacing: 0.06em;
 	text-transform: uppercase;
@@ -108,7 +111,8 @@ body{
 }
 
 .host-round-timer__value {
-	font-family: Impact, Charcoal, sans-serif;
+	font-family: 'Zain', sans-serif;
+	font-weight: 900;
 	font-size: 40px;
 	line-height: 1;
 	color: #ffea00;
@@ -133,7 +137,7 @@ body{
 #airdate_text{
 	display: flex;
 	color: white !important;
-	font-family: Optima, Segoe, "Segoe UI", Candara, Calibri, Arial, sans-serif;
+	font-family: 'Zain', sans-serif;
 	font-style: normal;
 	font-variant: normal;
 	font-weight: 500;
@@ -157,7 +161,8 @@ body{
 	text-align: center;
 	color: #ffea00;
 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0;/*#3f51b5;*/
-	font-family: Impact, Charcoal, sans-serif;
+	font-family: 'Zain', sans-serif;
+	font-weight: 900;
 }
 
 #game_board tr td{
@@ -172,7 +177,8 @@ body{
 }
 
 #players_table{
-	font-family: Impact, Charcoal, sans-serif;
+	font-family: 'Zain', sans-serif;
+	font-weight: 700;
 	text-align: center;
 	font-size:14px;
 	width:100%;
@@ -234,7 +240,7 @@ body{
 }
 
 #question_field h2{
-	font-family: Optima, Segoe, "Segoe UI", Candara, Calibri, Arial, sans-serif;
+	font-family: 'Zain', sans-serif;
 	font-style: normal;
 	font-variant: normal;
 	font-weight: 500;
@@ -264,7 +270,7 @@ body{
 
 
 #message_overlay li{
-	font-family: Optima, Segoe, "Segoe UI", Candara, Calibri, Arial, sans-serif;
+	font-family: 'Zain', sans-serif;
 	font-style: normal;
 	font-variant: normal;
 	font-weight: 500;
@@ -362,7 +368,7 @@ body{
  }
 
 #message_overlay h2{
-	font-family:  Arial;
+	font-family: 'Zain', sans-serif;
 	font-size: 3em;
 	font-variant: normal;
 	font-weight: 800;
@@ -389,7 +395,7 @@ body{
 	color: #ffffcc;
 	clear:left;
 	clear:right;
-	font-family: "Arial";
+	font-family: 'Zain', sans-serif;
 }
 
 
@@ -410,7 +416,8 @@ body{
 	width: inherit;
 	height: inherit;
 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /*#3f51b5;*/
-	font-family: Impact, Charcoal, sans-serif;
+	font-family: 'Zain', sans-serif;
+	font-weight: 800;
 	text-align:center;
 }
 
@@ -438,7 +445,8 @@ body{
 	width: inherit;
 	height: inherit;
 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /* #3f51b5;*/
-	font-family: Impact, Charcoal, sans-serif;
+	font-family: 'Zain', sans-serif;
+	font-weight: 800;
 }
 .player_type{
 	position: absolute;
@@ -448,7 +456,8 @@ body{
     border-radius: 25px 0px 0px 25px;
 	background-color:#FFA726;
 	font-size: 20px;
-	font-family: Impact, Charcoal, sans-serif;
+	font-family: 'Zain', sans-serif;
+	font-weight: 700;
 	display: flex;
     justify-content: center;
     align-items: center;
@@ -610,7 +619,7 @@ body{
 }
 	
 .player_question h2, #player_score, #player_name{
-	font-family: Arial, sans-serif;
+	font-family: 'Zain', sans-serif;
 	font-size: 35px;
 	font-variant: normal;
 	font-weight: 800;

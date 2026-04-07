@@ -6,7 +6,8 @@ HTML, BODY {
   height: 100%;
   width: 100%;
   font-size: 150px;
-  font-family: Impact, Charcoal, sans-serif;
+  font-family: 'Zain', sans-serif;
+  font-weight: 900;
   text-align:center;
   color:white;
   position:fixed;
@@ -82,7 +83,8 @@ HTML, BODY {
   border-radius: 12px;
   background: linear-gradient(145deg, rgba(20, 40, 90, 0.95), rgba(0, 25, 60, 0.97));
   color: #fff;
-  font-family: Impact, Charcoal, sans-serif;
+  font-family: 'Zain', sans-serif;
+  font-weight: 800;
   font-size: clamp(14px, 2.2vw, 20px);
   letter-spacing: 0.04em;
   text-transform: uppercase;

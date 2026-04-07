@@ -125,11 +125,10 @@ $(document).ready(function() {
 	  		loginNameStripped = loginNameStripped.toUpperCase();
 	  		if (loginNameStripped == '')
 	  		{
-	  			swal({
+	  			SimpleModal.alert({
 				  title: "Oops!",
 				  text: "Please enter a name.",
-				  timer: 2000,
-				  showConfirmButton: false
+				  timer: 2000
 				});
 	  		}
 	  		else
@@ -156,93 +155,12 @@ $(document).ready(function() {
 		});
 
 	  socket.on('option select new', function(name){
-
-	  		var this_result;
-
 	  		if(playerName == name){
 	  			$(".login").fadeOut('fast', function() {
 	  				$(".game_options").fadeIn('slow', function() {
-	  					
 	  				});
 	  			});
-	  			
-	  			//socket.emit('option select new', [30, "00s"]);
-				// inputOptions can be an object or Promise
-				var inputOptionsTime =  {
-				      '15': '15',
-				      '20': '20',
-				      '30': '30'
-				    };
-
-				var inputOptionsDecade = {
-				      '80s': '80s',
-				      '90s': '90s',
-				      '00s': '2000s',
-				      '10s': '2010s'
-				    };
-
-	  		/*swal.setDefaults({
-			  input: 'radio',
-			  confirmButtonText: 'Next &rarr;',
-			  showCancelButton: false,
-			  animation: true,
-			  progressSteps: ['1', '2']
-			});
-
-
-			var steps = [
-			  {
-			    title: 'Select Answer Time.',
-			    input: 'radio',
-			    inputOptions: inputOptionsTime,
-			    inputValidator: function (result) {
-				    return new Promise(function (resolve, reject) {
-				      if (result) {
-				        resolve();
-				      } else {
-				        reject('You need to select something!');
-				      }
-				    })
-				  }
-			  },
-			  {
-			    title: 'Which decade would you like to play in?',
-			    input: 'radio',
-			    inputOptions: inputOptionsDecade,
-			    inputValidator: function (result) {
-				    return new Promise(function (resolve, reject) {
-				      if (result) {
-				        resolve();
-				      } else {
-				        reject('You need to select something!');
-				      }
-				    })
-				  }
-			  }
-			];
-
-			swal.queue(steps).then(function (result) {
-				this_result = result;
-			  swal({
-				  title: 'Get ready for Jeopardy!',
-				  text: 'The answer time is ' + result[0] + ' seconds.',
-				  timer: 3500,
-				  showConfirmButton: false
-				}).then(
-				  function () {
-				  },
-				  // handling the promise rejection
-				  function (dismiss) {
-				    if (dismiss === 'timer') {
-				      console.log('I was closed by the timer')
-				      console.log("THIS RESULT DECADE AND TIMER: " + this_result);
-						socket.emit('option select new', this_result);	
-			 			swal.resetDefaults();
-				    }
-				  }
-				)
-			});*/
-		}
+	  		}
 	  });
 	var options_accept_clicked = false;
 
@@ -626,11 +544,10 @@ $(document).ready(function() {
 			
 			if (answer == '')
 			{
-					swal({
+					SimpleModal.alert({
 					  title: "Oops!",
 					  text: "Enter an answer.",
-					  timer: 3000,
-					  showConfirmButton: false
+					  timer: 3000
 					});
 			}
 			else{
@@ -731,16 +648,15 @@ $(document).ready(function() {
 		{
 			postScreenMessage("You're todays champion, congratulations!", false, 0);
 			setTimeout(function(){
-				swal({
+				SimpleModal.confirm({
 				  title: 'Play Again?',
 				  text: "Play again with the current contestants.",
-				  type: 'warning',
-				  showCancelButton: true,
-				  confirmButtonColor: '#3085d6',
-				  cancelButtonColor: '#d33',
-				  confirmButtonText: 'Play Again!'
-				}).then(function () {
-				   socket.emit('new game');
+				  confirmText: 'Play Again!',
+				  cancelText: 'Cancel'
+				}).then(function (confirmed) {
+				   if (confirmed) {
+					   socket.emit('new game');
+				   }
 				});
 			}, 8000);
 		}
@@ -825,21 +741,19 @@ $(document).ready(function() {
 	 	
 	 	if ( value == '')
 	 	{
-	 			swal({
+	 			SimpleModal.alert({
 				  title: "Oops!",
 				  text: "Please enter a wager.",
-				  timer: 4000,
-				  showConfirmButton: false
+				  timer: 4000
 				});
 				return false;
 	 	}
 	 	else if (value != parseInt(value, 10))
 	 	{
-	 			 swal({
+	 			 SimpleModal.alert({
 				  title: "Oops!",
 				  text: "The value must be a number.",
-				  timer: 4000,
-				  showConfirmButton: false
+				  timer: 4000
 				});
 	 			 return false;
 	 	}
@@ -853,11 +767,10 @@ $(document).ready(function() {
 	 	else
 	 	{
 	 		$('#bet_field').val('');
-	 		swal({
+	 		SimpleModal.alert({
 				  title: "Trying to pull a fast one?",
 				  text: validationObject.message,
-				  timer: 2000,
-				  showConfirmButton: false
+				  timer: 2000
 				});
 	 	}
 
@@ -956,18 +869,22 @@ $(document).ready(function() {
 	//ANIMATIONS
 	  // jquery transit is used to handle the animation
    $('#login_name').focusin(function() {
-        $('label').transition({x:'80px'},500,'ease').next()
-	        .transition({x:'5px'},500, 'ease');
+        var $label = $('#login_container .wrap-label label');
+        var $pen = $label.next('.login-name-pen-icon');
+        $label.transition({x:'80px'},500,'ease');
+        $pen.transition({x:'5px'},500, 'ease');
 			//setTimeout needed for Chrome, for some reson there is no animation from left to right, the pen is immediately present. Slight delay to adding the animation class fixes it
 	         setTimeout(function(){
-			    $('label').next().addClass('move-pen');
+			    $pen.addClass('move-pen');
 		      },100);
 			
 			});
 			  
-			  $('input').focusout(function() {
-	          $('label').transition({x:'0px'},500,'ease').next()
-	           .transition({x:'-100px'},500, 'ease').removeClass('move-pen');
+			  $('#login_name').focusout(function() {
+	          var $label = $('#login_container .wrap-label label');
+	          var $pen = $label.next('.login-name-pen-icon');
+	          $label.transition({x:'0px'},500,'ease');
+	          $pen.transition({x:'-100px'},500, 'ease').removeClass('move-pen');
 	});
 
 	// Web Speech API (Chrome/Edge/Safari): dictation runs entirely on the player's device.

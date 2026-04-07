@@ -1,9 +1,4 @@
-@import url(https://weloveiconfonts.com/api/?family=iconicfill);
-@import url(https://fonts.googleapis.com/css?family=Arvo);
-/* iconicfill */
-[class*="iconicfill-"]:before {
-  font-family: 'IconicFill', sans-serif;
-}
+@import url(zain-fonts.css);
 
 body,html{width:100%;height:100%;}
 .wrap{width:300px;}
@@ -17,7 +12,7 @@ body,html{width:100%;height:100%;}
   display:block;
     width: 100%;
     padding: 15px 0 15px 0px;
-    font-family: "Arvo";
+    font-family: 'Zain', sans-serif;
     font-weight: 400;
     color: #377D6A;
     background: rgba(0,0,0,0.3);
@@ -44,16 +39,12 @@ label{
     margin: 0;
     padding: 0;
     color:#fff;
-    font-family: 'Arvo';
+    font-family: 'Zain', sans-serif;
     font-size: 16px;
 }
 
 label span{
   color: black;
-}
-
-.swal2-radio label{
-  margin-left: 0!important;
 }
 
 .wrap-label{
@@ -65,14 +56,23 @@ label span{
   bottom: -15px;
   overflow: hidden;}
 
-.iconicfill-pen-alt2{
+/* Pen beside name field — Unicode glyph (no external icon font) */
+.login-name-pen-icon {
     position: absolute;
     left: 10px;
     color: #fff;
-    font-size:19px;
+    font-size: 19px;
+    line-height: 1;
     opacity: 1;
     top: 0;
-    transform:translateX(-100px);
+    transform: translateX(-100px);
+    margin: 0;
+    pointer-events: none;
+}
+.login-name-pen-icon::before {
+    content: "\270F";
+    display: block;
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
 }
 
 /* ==== Pen animation ==== */
@@ -93,7 +93,7 @@ label span{
   color: white;
   padding: 5%;
   font-size: 1.5rem;
-  font-family: Arial, sans-serif;
+  font-family: 'Zain', sans-serif;
   letter-spacing: 2px;
   margin-top: 20px;
 }
