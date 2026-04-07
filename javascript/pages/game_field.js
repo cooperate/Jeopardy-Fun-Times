@@ -110,6 +110,7 @@ $(document).ready(function() {
 	var playerCount = 0;
 	var contentBoard = '';
 	var activePlayerName = '';
+	var curQuestionId = '';
 	var nameIds = new Array();  //number reference for player
 	var playerNames = new Array();
 	var questionIsLive = false;
@@ -120,10 +121,20 @@ $(document).ready(function() {
 	var animated = false;
 	var lockPlayers = false;
 	var roundTimer = 600;
+	var hostRoundIsDoubleJeopardy = false;
 	var finalJeopardyThemeEnded = false;
 	var answerTime = 15;
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR = "../../game-media/images/";
+
+	var hostSoundMutedStored = sessionStorage.getItem('jeopardyHostSoundMuted');
+	var hostSoundMuted =
+		hostSoundMutedStored === null ? true : hostSoundMutedStored === '1';
+	/* Each full page load needs one click on the sound control before the browser allows audio */
+	var hostPageAudioPrimed = false;
+
+	var skipGameDataAfterHostRestore = false;
+	var hostRestoreSuppress = false;
 
 	//Speech Synthesis
 	var synth = window.speechSynthesis;
@@ -186,6 +197,9 @@ $(document).ready(function() {
 	var socket = io('/game');
 
 	socket.on('game data', function (data) {
+		if (skipGameDataAfterHostRestore) {
+			return;
+		}
 	    questionList[data.questionID] = new Question(data.question._category, data.question._value, data.question._question, data.question._answer, data.question._dailyDouble, data.question._questionId, data.question._mediaLink, data.question._round);
 	    questionList[data.questionID].mediaType = data.question._mediaType;
 	    console.log("QUESTION LIST LENGTH: " + Object.keys(questionList).length);
@@ -308,6 +322,100 @@ $(document).ready(function() {
     	$('#game_board_container tr td').css('textShadow', 'none');
 	}
 
+	function applyHostSnapshot(snapshot) {
+		if (!snapshot || !snapshot.gameActive || snapshot.questionCount < 61) {
+			return false;
+		}
+		skipGameDataAfterHostRestore = true;
+		hostRestoreSuppress = true;
+		questionList = [];
+		var qid;
+		for (qid in snapshot.questions) {
+			if (!Object.prototype.hasOwnProperty.call(snapshot.questions, qid)) {
+				continue;
+			}
+			var q = snapshot.questions[qid];
+			questionList[qid] = new Question(
+				q._category,
+				q._value,
+				q._question,
+				q._answer,
+				q._dailyDouble,
+				q._questionId,
+				q._mediaLink,
+				q._round
+			);
+			questionList[qid].mediaType = q._mediaType;
+		}
+		$('#players_table').empty();
+		playerCount = 0;
+		nameIds = {};
+		playerNames = [];
+		var pi;
+		for (pi = 0; pi < snapshot.players.length; pi++) {
+			buildPlayerBox(snapshot.players[pi].name);
+			$('#name_' + nameIds[snapshot.players[pi].name]).html(snapshot.players[pi].score);
+		}
+		player_login_count = snapshot.players.length;
+
+		var roundName =
+			snapshot.boardRound === 'Double Jeopardy' ? 'Double Jeopardy' : 'Jeopardy';
+		buildBoard(questionList, roundName);
+		animateBoard(roundName === 'Jeopardy');
+
+		var pq;
+		for (pq = 0; pq < snapshot.playedQuestionIds.length; pq++) {
+			$('#' + snapshot.playedQuestionIds[pq]).html('');
+		}
+
+		$('#game_intro').css('display', 'none');
+		/* Intro path hides this with slideUp; on refresh it stays on top of the board (black). */
+		$('#airdate_screen').stop(true, true).hide();
+		$('#master_container').css('display', 'block');
+		$('#message_overlay').stop(true, true).hide();
+		$('#category_container').css('display', 'none');
+		$('#player_container').css('display', 'none');
+		$('#question_field').stop(true, true).hide();
+
+		roundTimer = snapshot.roundTimer;
+		answerTime = snapshot.answerTime;
+		finalJeopardyCheck = !!snapshot.finalJeopardyCheck;
+		curQuestionId = snapshot.curQuestionId || '';
+		questionIsLive = false;
+		lockPlayers = false;
+		animated = true;
+		nextRoundFinalJeopardyCalled = !finalJeopardyCheck;
+		hostRoundIsDoubleJeopardy = snapshot.boardRound === 'Double Jeopardy';
+		updateHostRoundTimerDisplay();
+
+		if (
+			snapshot.activePlayerName &&
+			nameIds[snapshot.activePlayerName] !== undefined
+		) {
+			activePlayerName = snapshot.activePlayerName;
+			moveActiveIndicator(snapshot.activePlayerName);
+		}
+
+		if (snapshot.finalJeopardyCheck) {
+			postScreenMessage(
+				'Final Jeopardy — host view restored. Use player devices to continue.',
+				false,
+				0
+			);
+		}
+
+		setTimeout(function () {
+			hostRestoreSuppress = false;
+		}, 0);
+		return true;
+	}
+
+	socket.on('host state snapshot', function (snapshot) {
+		if (applyHostSnapshot(snapshot)) {
+			console.log('Host UI restored from server snapshot');
+		}
+	});
+
 	//populate game board
 	//set data for all questions
 
@@ -322,11 +430,18 @@ $(document).ready(function() {
 	}
 
 	function getSoundAndFadeAudio (soundObject) {
-
+		if (hostSoundMuted || !hostPageAudioPrimed) {
+			return;
+		}
 	    var sound = soundObject;
 	    sound.volume = 1.0;
 
 	    var fadeAudio = setInterval(function () {
+	    	if (hostSoundMuted || !hostPageAudioPrimed) {
+	    		clearInterval(fadeAudio);
+	    		stopSound(sound);
+	    		return;
+	    	}
 	        sound.volume = Number(sound.volume - 0.1).toFixed(2);
 	        // When volume at zero stop all the intervalling
 	        if (sound.volume <= 0.0) {
@@ -446,10 +561,42 @@ $(document).ready(function() {
 		setRoundTimer(data.round, data.roundTimer);
 	});
 
+	function formatHostRoundClock(totalSec) {
+		var sec = Math.max(0, parseInt(totalSec, 10) || 0);
+		var m = Math.floor(sec / 60);
+		var s = sec % 60;
+		return m + ':' + (s < 10 ? '0' : '') + s;
+	}
+
+	function updateHostRoundTimerDisplay() {
+		var wrap = $('#host_round_timer');
+		if (!wrap.length) {
+			return;
+		}
+		var sec = Math.max(0, parseInt(roundTimer, 10) || 0);
+		$('#host_round_timer_value').text(formatHostRoundClock(sec));
+		var label;
+		if (finalJeopardyCheck) {
+			label = 'FINAL J!';
+		} else if (hostRoundIsDoubleJeopardy) {
+			label = 'DOUBLE JEOPARDY';
+		} else {
+			label = 'JEOPARDY';
+		}
+		$('#host_round_timer_label').text(label);
+		wrap.toggleClass('host-round-timer--low', sec > 0 && sec <= 60);
+		wrap.toggleClass('host-round-timer--ended', sec <= 0);
+	}
+
 	function setRoundTimer(secondRound, roundTimerArg)
 	{
+		hostRoundIsDoubleJeopardy = !!secondRound;
 		roundTimer = roundTimerArg;
+		updateHostRoundTimerDisplay();
 		console.log("ROUND TIMER UPDATE WITH : " + roundTimer);
+		if (hostRestoreSuppress) {
+			return;
+		}
 		if (!secondRound)
 		{
 
@@ -745,6 +892,7 @@ $(document).ready(function() {
     });
 
     socket.on('new game', function(){
+    	skipGameDataAfterHostRestore = false;
     	questionList.length = 0;
 		questionList = [];
 		categories.length = 0;
@@ -761,6 +909,8 @@ $(document).ready(function() {
 		finalJeopardyCheck = false;
 		dailyDoubleBet = 0;
 		roundTimer = 600;
+		hostRoundIsDoubleJeopardy = false;
+		updateHostRoundTimerDisplay();
 		animated = false;
 		lockPlayers = false;
 		$("#message_overlay").css("background-color", "rgb(189, 189, 189)");
@@ -1423,43 +1573,121 @@ $(document).ready(function() {
     var boardFillSound = document.createElement( 'audio');
     boardFillSound.setAttribute('src', SOUNDS_DIR + 'board_fill.mp3');
 
-	if (promise !== undefined) {
-	  promise.then(_ => {
-	    // Autoplay started!
-	    console.log("Autoplay started!");
-	  }).catch(error => {
-	  	console.log("Autoplay failed to iniate.  Please click anywhere on screen.");
-		window.addEventListener("click", resumeAudioContext);
-	  });
-	}
-	var resumeAudioContext = function() {
-		// handler for fixing suspended audio context in Chrome
-		try {
-			console.log("Clicked screen, game should iniate.");
-			window.removeEventListener("click", resumeAudioContext);
-		} catch (e) {
-			// SoundJS context or web audio plugin may not exist
-			console.error("There was an error while trying to resume the Web Audio context...");
-			console.error(e);
+	var allHostAudio = [
+		jeopardyIntroMusic,
+		timesUpSound,
+		dateSoundEffect,
+		openUpSound,
+		playerJoinSound,
+		gameSoundWrong,
+		dailyDoubleSound,
+		buzzInSound,
+		roundOverSound,
+		finalJeopardyTheme,
+		finalJeopardyBloop,
+		chooseCategoryTheme,
+		questionTheme,
+		clockCountdown,
+		boardFillSound,
+	];
+
+	function hostPauseAllGameAudio() {
+		var i;
+		for (i = 0; i < allHostAudio.length; i++) {
+			try {
+				allHostAudio[i].pause();
+				allHostAudio[i].currentTime = 0;
+			} catch (e) {
+				/* ignore */
+			}
 		}
-	};
+		try {
+			window.speechSynthesis.cancel();
+		} catch (e2) {
+			/* ignore */
+		}
+	}
+
+	function updateHostSoundToggleUi() {
+		var btn = $('#host_sound_toggle');
+		if (!btn.length) {
+			return;
+		}
+		if (hostSoundMuted) {
+			btn.attr('aria-pressed', 'false');
+			btn.attr(
+				'aria-label',
+				'Sound off. Click to turn sound on.'
+			);
+			btn.attr(
+				'title',
+				'Sound off — click to turn on (browsers require a click before playing audio)'
+			);
+			btn.removeClass('host-sound-on').addClass('host-sound-off');
+			btn.text('🔇');
+		} else {
+			btn.attr('aria-pressed', 'true');
+			btn.attr('aria-label', 'Sound on. Click to mute.');
+			btn.attr('title', 'Sound on — click to mute');
+			btn.removeClass('host-sound-off').addClass('host-sound-on');
+			btn.text('🔊');
+		}
+	}
+
+	$('#host_sound_toggle').on('click', function () {
+		if (!hostPageAudioPrimed) {
+			hostPageAudioPrimed = true;
+			if (hostSoundMutedStored === null) {
+				hostSoundMuted = false;
+				sessionStorage.setItem('jeopardyHostSoundMuted', '0');
+			}
+			updateHostSoundToggleUi();
+			if (
+				!hostSoundMuted &&
+				$('#game_intro').is(':visible') &&
+				jeopardyIntroMusic.paused
+			) {
+				playSound(jeopardyIntroMusic);
+			}
+			return;
+		}
+		hostSoundMuted = !hostSoundMuted;
+		sessionStorage.setItem(
+			'jeopardyHostSoundMuted',
+			hostSoundMuted ? '1' : '0'
+		);
+		updateHostSoundToggleUi();
+		if (hostSoundMuted) {
+			hostPauseAllGameAudio();
+		}
+	});
+	updateHostSoundToggleUi();
 
     //loop the theme if it ends
     jeopardyIntroMusic.addEventListener('ended', function() {
+    	if (hostSoundMuted || !hostPageAudioPrimed) {
+    		return;
+    	}
     	this.currentTime = 0;
-    	this.play();
+    	this.play().catch(function () { /* autoplay / mute */ });
 	}, false);
 
     //loop the theme if it ends
     questionTheme.addEventListener('ended', function() {
+    	if (hostSoundMuted || !hostPageAudioPrimed) {
+    		return;
+    	}
     	this.currentTime = 0;
-    	this.play();
+    	this.play().catch(function () { /* ignore */ });
 	}, false);
 	
 	    //loop the theme if it ends
     chooseCategoryTheme.addEventListener('ended', function() {
+    	if (hostSoundMuted || !hostPageAudioPrimed) {
+    		return;
+    	}
     	this.currentTime = 0;
-    	this.play();
+    	this.play().catch(function () { /* ignore */ });
 	}, false);
 
     //when the final jeopardy theme ends
@@ -1573,6 +1801,12 @@ $(document).ready(function() {
     //read question aloud
     function messageToVoice(message, needsCallback, callback)
     {
+		if (hostSoundMuted || !hostPageAudioPrimed) {
+			if (needsCallback && typeof callback === 'function') {
+				callback();
+			}
+			return;
+		}
         /*var arr = [];
         var element = this;
         var txt = message;
@@ -1625,12 +1859,19 @@ $(document).ready(function() {
 
     function playSound(soundName)
     {
+    	if (hostSoundMuted || !hostPageAudioPrimed) {
+    		return Promise.resolve();
+    	}
     	soundName.volume = 1.0;
-    	soundName.currentTime=0;
-    	soundName.play();
+    	soundName.currentTime = 0;
+    	var p = soundName.play();
+    	if (p !== undefined && typeof p.catch === 'function') {
+    		return p.catch(function (err) {
+    			console.warn('Audio play blocked or failed:', err && err.message);
+    		});
+    	}
+    	return Promise.resolve();
     }
-
-    var promise = playSound(jeopardyIntroMusic);
 
     function stopSound(soundName)
     {
@@ -1765,4 +2006,6 @@ $(document).ready(function() {
 			}
 		}, 100);
 	}
+
+	updateHostRoundTimerDisplay();
 });	

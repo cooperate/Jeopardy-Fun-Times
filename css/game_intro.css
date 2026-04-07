@@ -23,4 +23,38 @@ HTML, BODY {
 #intro_h2_container{
   height: 100%;
 }
+
+/* Host: fixed sound toggle (autoplay unlock + mute) */
+.host-sound-toggle {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 100000;
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 12px;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+.host-sound-toggle:hover {
+  background: rgba(0, 0, 0, 0.65);
+  transform: scale(1.05);
+}
+.host-sound-toggle:focus {
+  outline: 2px solid #ffea00;
+  outline-offset: 2px;
+}
+.host-sound-toggle.host-sound-off {
+  opacity: 0.92;
 }

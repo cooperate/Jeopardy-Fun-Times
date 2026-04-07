@@ -74,12 +74,15 @@
 				<button class="buzzer"> BUZZ IN </button>
 			</div>
 			<div class = "player_answer_field">
-				<form id="answer_submit" action="">
-		      		<input id="answer_field" autocomplete="off" placeholder="What is..."/><button id="answer_btn">Submit</button>
-		    	</form>
-		    	<button id="start_button">
-    				<img id="start_img" src="../game-media/images/mic.gif" alt="Start">
-    			</button>
+				<div class="player_answer_row">
+					<form id="answer_submit" action="">
+						<input id="answer_field" autocomplete="off" placeholder="What is..."/><button type="submit" id="answer_btn">Submit</button>
+					</form>
+					<button type="button" id="start_button" class="mic_button" aria-label="Dictate answer with microphone" title="Dictate answer (uses your device microphone)">
+						<img id="start_img" src="../game-media/images/mic.gif" alt="">
+					</button>
+				</div>
+				<p id="mic_unsupported" class="mic_unsupported" hidden>Speech recognition is not supported in this browser. Type your answer instead.</p>
 			</div>
 			<div class = "player_bet_field">
 				<form id="bet_submit" action="">

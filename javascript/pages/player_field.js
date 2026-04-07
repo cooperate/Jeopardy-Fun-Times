@@ -25,6 +25,16 @@ $(document).ready(function() {
 	var answerTime = 15;
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR =  "../../game-media/images/";
+
+	var speechRecognition = null;
+
+	function stopSpeechRecognition() {
+		if (speechRecognition) {
+			try {
+				speechRecognition.stop();
+			} catch (e) { /* ignore */ }
+		}
+	}
 	
 	//$(".buzzer").prop("disabled",true);
 	$('#message_overlay').css('display', 'none');
@@ -442,10 +452,7 @@ $(document).ready(function() {
 	  socket.on('buzzed in times up', function(timesUp){
 	  		$("#answer_field").blur();
 	  		
-	  		if (recognition != undefined)
-		 	{
-		 		recognition.stop();
-			}
+	  		stopSpeechRecognition();
 	  		updateScore(timesUp.playerName, timesUp.score);
 	  		if(timesUp.dailyDouble || timesUp.allPlayersAnswered)
 	  		{
@@ -613,10 +620,7 @@ $(document).ready(function() {
 	 $( "#answer_submit" ).submit(function( event ) {
 	 	if (!pressedAnswer)
 	 	{
-		 	if (recognition != undefined)
-		 	{
-		 		recognition.stop();
-			}
+		 	stopSpeechRecognition();
 			var answer = $('#answer_field').val();
 			answer = answer.trim();
 			
@@ -966,87 +970,90 @@ $(document).ready(function() {
 	           .transition({x:'-100px'},500, 'ease').removeClass('move-pen');
 	});
 
-	//CHECK FOR WEB SPEECH API
-
+	// Web Speech API (Chrome/Edge/Safari): dictation runs entirely on the player's device.
 	var final_transcript = '';
 	var recognizing = false;
 	var ignore_onend;
 	var start_timestamp;
-	if (!('webkitSpeechRecognition' in window)) {
-		  $("#start_button").css("display", "none");
-		} else {
-		  start_button.style.display = 'inline-block';
-		  var recognition = new webkitSpeechRecognition();
-		  recognition.continuous = true;
-		  recognition.interimResults = true;
-		  recognition.onstart = function() {
-		    recognizing = true;
-		    $('#start_img').attr("src", IMAGES_DIR + 'mic-animate.gif');
-		  };
-		  recognition.onerror = function(event) {
-		    if (event.error == 'no-speech') {
-		      start_img.src = IMAGES_DIR + 'mic.gif';
-		      ignore_onend = true;
-		    }
-		    if (event.error == 'audio-capture') {
-		      start_img.src = IMAGES_DIR + 'mic.gif';
-		      ignore_onend = true;
-		    }
-		    if (event.error == 'not-allowed') {
-		      if (event.timeStamp - start_timestamp < 100) {
-		      } else {
-		      }
-		      ignore_onend = true;
-		    }
-		  };
-		  recognition.onend = function() {
-		    recognizing = false;
-		    if (ignore_onend) {
-		      return;
-		    }
-		    $('#start_img').attr("src", IMAGES_DIR + 'mic.gif');
-		    if (!final_transcript) {
-		      return;
-		    }
-		    if (window.getSelection) {
-		      window.getSelection().removeAllRanges();
-		      var range = document.createRange();
-		      range.selectNode(document.getElementById('answer_field'));
-		      window.getSelection().addRange(range);
-		    }
-		  };
-		  recognition.onresult = function(event) {
-		    var interim_transcript = '';
-		    for (var i = event.resultIndex; i < event.results.length; ++i) {
-		      if (event.results[i].isFinal) {
-		        final_transcript += event.results[i][0].transcript;
-		      } else {
-		        interim_transcript += event.results[i][0].transcript;
-		      }
-		    }
-		    final_transcript = capitalize(final_transcript);
-		    console.log(final_transcript);
-		    $('#answer_field').val( final_transcript);
-		    if (final_transcript || interim_transcript) {
-		    }
-		  };
-		}
+	var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-		$('#start_button').click(function(event){
-		  if (recognizing) {
-		    recognition.stop();
-		    return;
-		  }
-		  final_transcript = '';
-		  recognition.lang = 'en-US';
-		  recognition.start();
-		  ignore_onend = false;
-		  $('#answer_field').val( '');
-		  $('#start_img').attr("src", IMAGES_DIR + 'mic-slash.gif');
-		  start_timestamp = event.timeStamp;
-	});
-	var first_char = /\S/;
 	function capitalize(s) {
-  			return s.replace(first_char, function(m) { return m.toUpperCase(); });
+		var first_char = /\S/;
+		return s.replace(first_char, function (m) {
+			return m.toUpperCase();
+		});
+	}
+
+	if (!SpeechRecognition) {
+		$('#start_button').hide();
+		$('#mic_unsupported').prop('hidden', false);
+	} else {
+		speechRecognition = new SpeechRecognition();
+		speechRecognition.continuous = true;
+		speechRecognition.interimResults = true;
+		speechRecognition.onstart = function () {
+			recognizing = true;
+			$('#start_img').attr('src', IMAGES_DIR + 'mic-animate.gif');
+		};
+		speechRecognition.onerror = function (event) {
+			if (
+				event.error === 'no-speech' ||
+				event.error === 'audio-capture' ||
+				event.error === 'not-allowed'
+			) {
+				$('#start_img').attr('src', IMAGES_DIR + 'mic.gif');
+				ignore_onend = true;
+			}
+		};
+		speechRecognition.onend = function () {
+			recognizing = false;
+			if (ignore_onend) {
+				return;
+			}
+			$('#start_img').attr('src', IMAGES_DIR + 'mic.gif');
+			if (!final_transcript) {
+				return;
+			}
+			if (window.getSelection) {
+				window.getSelection().removeAllRanges();
+				var range = document.createRange();
+				range.selectNode(document.getElementById('answer_field'));
+				window.getSelection().addRange(range);
+			}
+		};
+		speechRecognition.onresult = function (event) {
+			var interim_transcript = '';
+			for (var i = event.resultIndex; i < event.results.length; ++i) {
+				if (event.results[i].isFinal) {
+					final_transcript += event.results[i][0].transcript;
+				} else {
+					interim_transcript += event.results[i][0].transcript;
+				}
+			}
+			final_transcript = capitalize(final_transcript);
+			$('#answer_field').val(final_transcript + interim_transcript);
+		};
+
+		$('#start_button').on('click', function (event) {
+			if (!speechRecognition) {
+				return;
+			}
+			if (recognizing) {
+				speechRecognition.stop();
+				return;
+			}
+			final_transcript = '';
+			speechRecognition.lang = 'en-US';
+			try {
+				speechRecognition.start();
+			} catch (e) {
+				console.warn('Speech recognition start failed', e);
+				return;
+			}
+			ignore_onend = false;
+			$('#answer_field').val('');
+			$('#start_img').attr('src', IMAGES_DIR + 'mic-slash.gif');
+			start_timestamp = event.timeStamp;
+		});
 	}
 });
