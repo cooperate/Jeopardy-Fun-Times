@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, shrink-to-fit=no">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <title>Host — new or join room</title>
+  <link rel="stylesheet" type="text/css" href="/css/style.css">
+  <link rel="stylesheet" href="/css/simple_modal.css">
+</head>
+<body>
+  <div id="game_select_button_container">
+    <div class="game_select_button">
+      <button type="button" id="host_new_room_btn" class="player_join_button fancy_button bg-gradient1">New game</button>
+    </div>
+    <div class="game_select_button" style="margin-top: 1rem;">
+      <button type="button" id="host_join_room_btn" class="player_join_button fancy_button bg-gradient1">Join with room code</button>
+    </div>
+    <p style="margin-top: 1.5rem; max-width: 22rem; text-align: center; opacity: 0.85; font-size: 0.95rem;">
+      Players open <a href="/home"><code>/home</code></a> and enter the same code, or use <code>/player?room=CODE</code>.
+    </p>
+  </div>
+  <script src="/javascript/libraries/jquery-3.7.1.min.js"></script>
+  <script src="/javascript/libraries/simple_modal.js"></script>
+  <script src="/javascript/libraries/gradients.js"></script>
+  <script src="/javascript/pages/game_host_lobby.js"></script>
+</body>
+</html>

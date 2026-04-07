@@ -9,8 +9,17 @@ const { ensureGameHighScoreFile } = require('./lib/ensureDataFiles');
 const { Player, Question } = require('./lib/models');
 const { parseMediaType, parseAnswer } = require('./lib/parsers');
 const { evaluateAnswer } = require('./lib/evaluateAnswer');
+const {
+	createGameRoom,
+	normalizeRoomCode: normRoom,
+	generateUniqueRoomCode,
+	ROUND_TIME,
+} = require('./lib/gameRoom');
 
 ensureGameHighScoreFile(config.paths.gameHighScore);
+
+/** code (uppercase) -> per-room game state */
+var gameRooms = new Map();
 
 const app = express();
 const http = require('http').Server(app);
@@ -46,9 +55,8 @@ app.get('/', function (req, res) {
   <h1>Jeopardy</h1>
   <p>Open these URLs in the browser (same machine or same LAN, depending on how you run the server).</p>
   <ul>
-    <li><strong>Main game board</strong> (TV / host): <a href="/game"><code>/game</code></a></li>
-    <li><strong>Player buzzer</strong> (each contestant): <a href="/player"><code>/player</code></a> — three players join and enter names; the third to join picks decade &amp; timer.</li>
-    <li><strong>Room code entry</strong> (optional): <a href="/home"><code>/home</code></a> — use if your group uses the room-code flow to reach the player page.</li>
+    <li><strong>Host</strong>: <a href="/game"><code>/game</code></a> — create a room or enter a code; you are sent to <code>/game/ROOM</code> for the board.</li>
+    <li><strong>Players</strong>: <a href="/home"><code>/home</code></a> to enter the room code, or open <code>/player?room=ROOM</code> directly.</li>
   </ul>
   <p>Start the server with <code>npm start</code> (or <code>node app.js</code>), then use the links above.</p>
 </body>
@@ -60,12 +68,26 @@ app.get('/home', function(req, res){
   	res.sendFile(__dirname + '/html/game_select.html');
 });
 
-app.get('/game', function(req, res){
-  	res.sendFile(__dirname + '/html/index.html');
+app.get('/game', function (req, res) {
+	res.sendFile(__dirname + '/html/game_host_lobby.html');
 });
 
-app.get('/player', function(req, res){
-  res.sendFile(__dirname + '/html/player_field.html');
+app.get('/game/:roomCode', function (req, res) {
+	var code = normRoom(req.params.roomCode);
+	if (!code || !gameRooms.has(code)) {
+		return res.redirect('/game');
+	}
+	res.sendFile(__dirname + '/html/index.html');
+});
+
+app.get('/api/rooms/new', function (req, res) {
+	var code = generateUniqueRoomCode(gameRooms);
+	gameRooms.set(code, createGameRoom(code));
+	res.json({ roomCode: code });
+});
+
+app.get('/player', function (req, res) {
+	res.sendFile(__dirname + '/html/player_field.html');
 });
 
 
@@ -78,41 +100,28 @@ var gameSpc = io.of('/game');
 //player socket
 var playerSpc = io.of('/player');
 
+function ioRoomName(code) {
+	return 'jr-' + code;
+}
+function emitGame(code, event, data) {
+	gameSpc.to(ioRoomName(code)).emit(event, data);
+}
+function emitPlayers(code, event, data) {
+	playerSpc.to(ioRoomName(code)).emit(event, data);
+}
+function getRoomFromSocket(socket) {
+	if (!socket || !socket.roomCode) {
+		return null;
+	}
+	return gameRooms.get(socket.roomCode) || null;
+}
+
 //babyparse is deprecated now
 var Baby = require('papaparse');
-var gameData = new Array();
-var players = new Array();
-var questions = new Array();
-var curQuestionId;
-var curActivePlayer; //player who holds the current lead for picking questions
 var file = __dirname + '/data/JEOPARDY_CSV_test.csv';
 var lastNameFile = config.paths.lastNameFile;
 var gameHistory = config.paths.gameHistory;
 var gameHighScore = config.paths.gameHighScore;
-var buzzerFlipped = false;
-var buzzedInPlayerName;  //tracks player currently answering questions
-
-//TIMERS 
-var roundTimerObject;
-const ROUND_TIME = 600;//600;
-var ANSWER_TIME = 15;
-var roundTimer = ROUND_TIME;
-var ROUND_QUESTIONS = 30;
-var DECADE = "10s";
-var AIRDATE = "0";
-var GAME_ID = 0;
-var questionTimer = null;
-var questionTimerCount = 6;
-var buzzedInTimer = null;
-var buzzedInTimerCount = ANSWER_TIME;
-var dailyDoubleTimer = null;
-var dailyDoubleTimerCount = ANSWER_TIME;
-var isSecondRound = false;
-var finalJeopardyCheck = false;
-var newGameCounter = 0;
-var gameState = {"active": false};
-var playedClueIds = new Set();
-var playerJoinOrder = [];
 var sqlite3 = require('sqlite3').verbose();
 var db = new sqlite3.Database(config.paths.cluesDb);
 
@@ -120,12 +129,23 @@ var db = new sqlite3.Database(config.paths.cluesDb);
 
 checkForFullGame();
 
-function buildHostSnapshot() {
-	var keys = Object.keys(questions);
+function findRandomPlayerName(room) {
+	var names = [];
+	for (var p in room.players) {
+		names.push(room.players[p].name);
+	}
+	if (!names.length) {
+		return '';
+	}
+	return names[Math.floor(Math.random() * names.length)];
+}
+
+function buildHostSnapshot(room) {
+	var keys = Object.keys(room.questions);
 	var questionsPlain = {};
 	for (var i = 0; i < keys.length; i++) {
 		var k = keys[i];
-		var q = questions[k];
+		var q = room.questions[k];
 		if (!q) {
 			continue;
 		}
@@ -142,33 +162,35 @@ function buildHostSnapshot() {
 		};
 	}
 	var boardRound = 'Jeopardy';
-	if (isSecondRound || finalJeopardyCheck) {
+	if (room.isSecondRound || room.finalJeopardyCheck) {
 		boardRound = 'Double Jeopardy';
 	}
 	var playersList = [];
-	for (var j = 0; j < playerJoinOrder.length; j++) {
-		var pname = playerJoinOrder[j];
-		if (!players[pname]) {
+	for (var j = 0; j < room.playerJoinOrder.length; j++) {
+		var pname = room.playerJoinOrder[j];
+		if (!room.players[pname]) {
 			continue;
 		}
 		playersList.push({
 			name: pname,
-			score: players[pname].score,
-			isActive: players[pname].active,
-			givenAnswer: players[pname].givenAnswer,
+			score: room.players[pname].score,
+			isActive: room.players[pname].active,
+			givenAnswer: room.players[pname].givenAnswer,
 		});
 	}
-	var ap = getPlayerActive();
+	var ap = getPlayerActive(room);
 	return {
-		gameActive: gameState.active === true,
-		airdate: AIRDATE,
-		answerTime: ANSWER_TIME,
-		roundTimer: roundTimer,
-		isSecondRound: isSecondRound,
-		finalJeopardyCheck: finalJeopardyCheck,
+		gameActive: room.gameState.active === true,
+		airdate: room.airdate,
+		answerTime: room.answerTime,
+		roundTimer: room.roundTimer,
+		isSecondRound: room.isSecondRound,
+		finalJeopardyCheck: room.finalJeopardyCheck,
+		finalJeopardyWageringPhase: room.finalJeopardyWageringPhase,
+		finalJeopardyAnswerPhase: room.finalJeopardyAnswerPhase,
 		activePlayerName: ap == null ? '' : ap,
-		curQuestionId: curQuestionId == null ? '' : curQuestionId,
-		playedQuestionIds: Array.from(playedClueIds),
+		curQuestionId: room.curQuestionId == null ? '' : room.curQuestionId,
+		playedQuestionIds: Array.from(room.playedClueIds),
 		questions: questionsPlain,
 		players: playersList,
 		questionCount: keys.length,
@@ -208,29 +230,17 @@ function download(uri, filename, callback, type) {
 		});
 }
 
-var curRoomCodes = new Array();
-
-function randomString(length, chars) {
-    var result = '';
-    for (var i = length; i > 0; --i) result += chars[Math.floor(Math.random() * chars.length)];
-    return result;
-}
-var rString = randomString(32, '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ');
-
 playerSelect.on('connection', function(socket){
-	curRoomCodes.push(randomString(4, rString));
 	socket.on('room code sent', function(roomCode){
-		console.log(curRoomCodes);
-		var _roomCode = roomCode.toUpperCase();
-		console.log("ROOM CODE SENT " + _roomCode);
-		if(curRoomCodes.indexOf(_roomCode) != -1){
+		var _roomCode = normRoom(roomCode);
+		console.log('ROOM CODE SENT ' + _roomCode);
+		if (_roomCode && gameRooms.has(_roomCode)){
 			socket.emit('room code validated', true);
-			socket.join(_roomCode);
 			var base = config.publicBaseUrl || ('http://localhost:' + config.port);
-			socket.emit('send to room', base + '/player');
+			socket.emit('send to room', base + '/player?room=' + encodeURIComponent(_roomCode));
 		}
 		else{
-			socket.emit('room code validated', false);	
+			socket.emit('room code validated', false);
 		}
 	});
 	socket.on('disconnect', function () {
@@ -238,89 +248,192 @@ playerSelect.on('connection', function(socket){
   	});
 });
 
-gameSpc.on('connection', function(socket){
-  try {
-  	socket.emit('host state snapshot', buildHostSnapshot());
-  } catch (err) {
-  	console.error('buildHostSnapshot failed', err);
-  	socket.emit('host state snapshot', { gameActive: false });
-  }
+gameSpc.on('connection', function (socket) {
+	var q = socket.handshake.query || {};
+	var code = normRoom(q.room);
+	if (!code || !gameRooms.has(code)) {
+		socket.emit('host room error', {
+			message: 'Unknown or missing room. Open /game to create a game or enter a code.',
+		});
+		socket.disconnect(true);
+		return;
+	}
+	socket.roomCode = code;
+	socket.join(ioRoomName(code));
+	var room = gameRooms.get(code);
 
-  //buzzers on/off
-  socket.on('open buzzer', function () {
-  	openTheBuzzer();
-  });
+	socket.emit('host room code', { code: room.code });
+	try {
+		socket.emit('host state snapshot', buildHostSnapshot(room));
+	} catch (err) {
+		console.error('buildHostSnapshot failed', err);
+		socket.emit('host state snapshot', { gameActive: false });
+	}
 
-  socket.on('close buzzer', function () {
-  	playerSpc.emit('close buzzer');
-  });
+	socket.on('host request new game', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		console.log('host request new game');
+		r.pendingHostForcedNewGame = true;
+		r.newGameCounter = 0;
+		r.finalJeopardyWageringPhase = false;
+		r.finalJeopardyAnswerPhase = false;
+		emitPlayers(r.code, 'new game');
+		emitGame(r.code, 'new game', r.gameData);
+	});
 
-  socket.on('open response final jeopardy', function(){
-  	playerSpc.emit('open response final jeopardy', questions["FJ_0_0"]._question);
-  });
+	//buzzers on/off
+	socket.on('open buzzer', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		openTheBuzzer(r);
+	});
 
-  socket.on('second round started', function(content){
-  	playerSpc.emit('second round started', content);
-  });
+	socket.on('close buzzer', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.playerBuzzerUnlocked = false;
+		emitPlayers(r.code, 'close buzzer');
+	});
 
-  socket.on('open question category new round', function(){
-  	playerSpc.emit('open question category new round', getPlayerActive());
-  });
+	socket.on('open response final jeopardy', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.finalJeopardyAnswerPhase = true;
+		r.finalJeopardyWageringPhase = false;
+		emitPlayers(r.code, 'open response final jeopardy', r.questions['FJ_0_0']._question);
+	});
 
-  socket.on('open question category', function(playerNameActive){
-  	console.log("Showing Category Select");
-  	setPlayerActive(players[playerNameActive]);
-  	playerSpc.emit('open question category', playerNameActive);
-  });
+	socket.on('second round started', function (content) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.lastPlayerBoardMarkup = typeof content === 'string' ? content : r.lastPlayerBoardMarkup;
+		r.categorySelectOpen = false;
+		r.clueInProgress = false;
+		emitPlayers(r.code, 'second round started', content);
+	});
 
-  socket.on('next round started', function(){
-  	changeActivePlayerNewRound();
-  	gameSpc.emit('next round start confirmed', getPlayerActive());
-  	playerSpc.emit('next round start confirmed', getPlayerActive());
-  });
+	socket.on('open question category new round', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.categorySelectOpen = true;
+		emitPlayers(r.code, 'open question category new round', getPlayerActive(r));
+	});
 
-  //Whenever someone disconnects this piece of code executed
-  socket.on('disconnect', function () {
-    console.log('A user disconnected');
-  });
+	socket.on('open question category', function (playerNameActive) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		console.log('Showing Category Select');
+		r.categorySelectOpen = true;
+		setPlayerActive(r, r.players[playerNameActive]);
+		emitPlayers(r.code, 'open question category', playerNameActive);
+	});
 
-  socket.on('question timer out', function(){
-  	questionTimesUp();
-  })
+	socket.on('next round started', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		changeActivePlayerNewRound(r);
+		emitGame(r.code, 'next round start confirmed', getPlayerActive(r));
+		emitPlayers(r.code, 'next round start confirmed', getPlayerActive(r));
+	});
 
-  //assign random player, pass in game markup
-  socket.on('player random', function(data){
-  		var playerActive = players[findRandomPlayer()];
-  		gameState['active'] = true;
-  		playerActive.isActive = true;
-  		playerSpc.emit('active player', {playerName: getPlayerActive(), gameMarkup: data.gameMarkup, newGame: "new game", airdate: AIRDATE});
-  		gameSpc.emit('active player', {playerName: getPlayerActive(), newGame: "new game", airdate: AIRDATE});
-  });
+	socket.on('disconnect', function () {
+		console.log('A user disconnected');
+	});
 
-  socket.on('final jeopardy started', function(){
-  	playerSpc.emit('final jeopardy started');
-  });
+	socket.on('question timer out', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		questionTimesUp(r);
+	});
 
-  socket.on('final jeopardy bid', function()
-  {
-  	playerSpc.emit('final jeopardy bid', questions["FJ_0_0"]._category);
-  });
+	socket.on('player random', function (data) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		var playerActive = r.players[findRandomPlayerName(r)];
+		r.gameState.active = true;
+		playerActive.isActive = true;
+		if (data && typeof data.gameMarkup === 'string') {
+			r.lastPlayerBoardMarkup = data.gameMarkup;
+		}
+		r.categorySelectOpen = false;
+		r.clueInProgress = false;
+		r.playerBuzzerUnlocked = false;
+		emitPlayers(r.code, 'active player', {
+			playerName: getPlayerActive(r),
+			gameMarkup: data.gameMarkup,
+			newGame: 'new game',
+			airdate: r.airdate,
+		});
+		emitGame(r.code, 'active player', {
+			playerName: getPlayerActive(r),
+			newGame: 'new game',
+			airdate: r.airdate,
+		});
+	});
 
-  socket.on('final jeopardy time out', function()
-  {
-  	playerSpc.emit('final jeopardy time out');
-  });
+	socket.on('final jeopardy started', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		emitPlayers(r.code, 'final jeopardy started');
+	});
 
-    socket.on('game over', function(winningPlayerData){
-    	fs.appendFileSync(gameHistory, '\n' + GAME_ID);
-    	fs.appendFileSync(gameHighScore, '\n' + winningPlayerData.winningPlayerName + ',' + winningPlayerData.winningPlayerScore);
-    	playerSpc.emit('game over', winningPlayerData.winningPlayerName);
-    });
+	socket.on('final jeopardy bid', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.finalJeopardyWageringPhase = true;
+		emitPlayers(r.code, 'final jeopardy bid', r.questions['FJ_0_0']._category);
+	});
 
-    socket.on('fetch high scores', function(){
-    	var highScores = findHighScores();
-    	gameSpc.emit('high scores', highScores);
-    });
+	socket.on('final jeopardy time out', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		emitPlayers(r.code, 'final jeopardy time out');
+	});
+
+	socket.on('game over', function (winningPlayerData) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		fs.appendFileSync(gameHistory, '\n' + r.gameId);
+		fs.appendFileSync(
+			gameHighScore,
+			'\n' + winningPlayerData.winningPlayerName + ',' + winningPlayerData.winningPlayerScore
+		);
+		emitPlayers(r.code, 'game over', winningPlayerData.winningPlayerName);
+	});
+
+	socket.on('fetch high scores', function () {
+		var highScores = findHighScores();
+		socket.emit('high scores', highScores);
+	});
 
     function findHighScores(){
     	var gameHighScoreSend = fs.readFileSync(gameHighScore, {
@@ -357,140 +470,210 @@ gameSpc.on('connection', function(socket){
 		return highScoreArray;
     }
 
-   console.log("Master Screen Connected");
+	console.log('Master Screen Connected');
 
-   function findRandomPlayer()
-   {	
-   	 var names = new Array();
-   		for (player in players)
-   		{
-   			names.push(players[player].name);
-   		}
-   	return names[Math.floor(Math.random() * objectLength(players))];
-   }
+	socket.on('begin round timer', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		stopTimer(r.roundTimerObject);
+		r.roundTimerObject = null;
+		r.roundTimer = ROUND_TIME;
+		setRoundTimer(r);
+	});
 
-   //TIMERS
+	socket.on('start countdown', function (questionId) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.curQuestionId = questionId;
+		questionBeginCountdown(r);
+		emitGame(r.code, 'countdown', { timerCount: r.questionTimerCount, questionId: questionId });
+		emitPlayers(r.code, 'expose question');
+	});
 
-   socket.on('begin round timer', function(){
-   		stopTimer(roundTimerObject);
-   		roundTimerObject = null;
-   		roundTimer = ROUND_TIME;
-   		setRoundTimer();
-   });
+	socket.on('continue countdown', function (questionId) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		questionContinueCountdown(r);
+		emitGame(r.code, 'countdown', { timerCount: r.questionTimerCount, questionId: questionId });
+	});
 
-  socket.on('start countdown', function(questionId){
-  	curQuestionId = questionId;
-  	questionBeginCountdown();
-  	gameSpc.emit('countdown', {timerCount: questionTimerCount, questionId: questionId});
-  	playerSpc.emit('expose question');
-  });
+	socket.on('open submit dd', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.dailyDoubleTimerCount = r.answerTime;
+		r.dailyDoubleTimer = null;
+		emitPlayers(r.code, 'daily double question finished being read');
+		dailyDoubleBeginCountdown(r);
+	});
 
-  socket.on('continue countdown', function(questionId){
-  	questionContinueCountdown();
-  	gameSpc.emit('countdown', {timerCount: questionTimerCount, questionId: questionId}); //is this being called earlier somehow>SSS
-  });
-
-  socket.on('open submit dd', function(){
-  	dailyDoubleTimerCount = ANSWER_TIME;
-  	dailyDoubleTimer = null;
-  	playerSpc.emit('daily double question finished being read');
-  	dailyDoubleBeginCountdown();
-  });
-
-	//after all messages are done move play to next active player
-
-	socket.on('finished all messages dd', function(){
+	socket.on('finished all messages dd', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
 		console.log('finished all messages dd');
-		//if (!finalJeopardyCheck){
-			playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
-			gameSpc.emit('active player', {playerName: getPlayerActive(), correct: false});
-		//}
+		returnToBoardPickerState(r);
+		emitPlayers(r.code, 'active player', {
+			playerName: getPlayerActive(r),
+			correct: false,
+			newGame: 'no',
+		});
+		emitGame(r.code, 'active player', { playerName: getPlayerActive(r), correct: false });
 	});
 
-	socket.on('all messages done score update correct', function(){ 
-		//if(!finalJeopardyCheck){
-			console.log("Next player should be going...");
-			playerSpc.emit('active player', {playerName: getPlayerActive(), correct: true, newGame: "no"});
-			gameSpc.emit('active player', {playerName: getPlayerActive(), correct: true});
-		//}
-	});
-	socket.on('all messages done score update', function(){ 
-		//if(!finalJeopardyCheck){
-			console.log("Next player should be going...");
-			playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
-			gameSpc.emit('active player', {playerName: getPlayerActive(), correct: false});
-		//}
+	socket.on('all messages done score update correct', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		console.log('Next player should be going...');
+		returnToBoardPickerState(r);
+		emitPlayers(r.code, 'active player', {
+			playerName: getPlayerActive(r),
+			correct: true,
+			newGame: 'no',
+		});
+		emitGame(r.code, 'active player', { playerName: getPlayerActive(r), correct: true });
 	});
 
-	socket.on('all messages done buzzed in time out', function(){
+	socket.on('all messages done score update', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		console.log('Next player should be going...');
+		returnToBoardPickerState(r);
+		emitPlayers(r.code, 'active player', {
+			playerName: getPlayerActive(r),
+			correct: false,
+			newGame: 'no',
+		});
+		emitGame(r.code, 'active player', { playerName: getPlayerActive(r), correct: false });
+	});
+
+	socket.on('all messages done buzzed in time out', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
 		console.log('all messages done buzzed in time out');
-		if (checkIfAllPlayersAnswered()/*&& !finalJeopardyCheck*/){
-			playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
-			gameSpc.emit('active player', {playerName: getPlayerActive(), correct: false});
+		if (checkIfAllPlayersAnswered(r)) {
+			returnToBoardPickerState(r);
+			emitPlayers(r.code, 'active player', {
+				playerName: getPlayerActive(r),
+				correct: false,
+				newGame: 'no',
+			});
+			emitGame(r.code, 'active player', { playerName: getPlayerActive(r), correct: false });
 		}
-});
-
-	socket.on('new game ready game board', function(){
-		newGameCounter = 0;
-	  	buzzerFlipped =false;
-	  	somecounter = 0;
-	  	gameData.length = 0;
-	  	gameData = [];
-	  	questions.length = 0;
-	  	questions = [];
-	  	playedClueIds.clear();
-	  	finalJeopardyCheck = false;
-	  	isSecondRound = false;
-	  	roundTimer = ROUND_TIME;
-	  	for(player in players){
-	  		players[player].score = 0;
-	  		players[player].givenAnswer = false;
-	  		players[player].isActive = false;
-	  	}
-	  	//pick next possible game
-	  	//CHOOSE GAME FROM DB
-		console.log(gameData);
-		setGameDataNew();
 	});
 
-	socket.on('buzzer pressed confirmed', function(nameData){
-		playerSpc.emit('buzzer pressed', {playerName: nameData.playerName, questionId: nameData.questionId});
+	socket.on('new game ready game board', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.pendingHostForcedNewGame = false;
+		r.newGameCounter = 0;
+		r.buzzerFlipped = false;
+		r.somecounter = 0;
+		r.gameData = [];
+		r.questions = {};
+		r.playedClueIds.clear();
+		r.finalJeopardyCheck = false;
+		r.finalJeopardyWageringPhase = false;
+		r.finalJeopardyAnswerPhase = false;
+		r.finalJeopardyBet = {};
+		r.isSecondRound = false;
+		r.roundTimer = ROUND_TIME;
+		r.lastPlayerBoardMarkup = '';
+		r.categorySelectOpen = false;
+		r.clueInProgress = false;
+		r.playerBuzzerUnlocked = false;
+		for (var player in r.players) {
+			r.players[player].score = 0;
+			r.players[player].givenAnswer = false;
+			r.players[player].isActive = false;
+		}
+		console.log(r.gameData);
+		setGameDataNew(r);
 	});
 
+	socket.on('buzzer pressed confirmed', function (nameData) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		emitPlayers(r.code, 'buzzer pressed', {
+			playerName: nameData.playerName,
+			questionId: nameData.questionId,
+		});
+	});
 });
 
-var currentConnections = new Array();
-var disconnectedUserNames = new Array();
-playerSpc.on('connection', function(socket){
+var playerConnectionBySocketId = {};
+
+playerSpc.on('connection', function (socket) {
+	var q = socket.handshake.query || {};
+	var code = normRoom(q.room);
+	if (!code || !gameRooms.has(code)) {
+		socket.emit('player room error', {
+			message: 'Missing or unknown room. Use /home with a code from the host, or open /player?room=CODE.',
+		});
+		socket.disconnect(true);
+		return;
+	}
+	socket.roomCode = code;
+	socket.join(ioRoomName(code));
+	var room = gameRooms.get(code);
+
 	console.log('player connected.');
-	currentConnections.push(socket);
-	if (gameState["active"] == true){
-		console.log("player attempting to reconnect")
-		loadGame(disconnectedUserNames[0], socket, players);
-  	}
 
-	//handle player login name/ player join
-  	socket.on('login name', function(name){
-		console.log("PLAYER JOINED WITH NAME: " + name);
-	  	socket.username = name;
-	  	currentConnections[socket.id] = {socket: socket};
-	  	currentConnections[socket.id].username = name;
-	  	console.log("CONNECTION USER DATA " + currentConnections);
-		gameSpc.emit('login name', name);
-		if (playerJoinOrder.indexOf(name) === -1) {
-			playerJoinOrder.push(name);
+	socket.on('login name', function (name) {
+		name = String(name || '').trim().toUpperCase();
+		if (!name) {
+			return;
 		}
-		players[name] = new Player(name);
-		console.log(players);
-		if (objectLength(players)== 3)
-		{
-			playerSpc.emit('option select new', name);
+		console.log('PLAYER LOGIN: ' + name);
+		socket.username = name;
+		playerConnectionBySocketId[socket.id] = { username: name, roomCode: code };
+
+		var existing = room.players[name];
+		if (existing) {
+			console.log('PLAYER RECONNECT: ' + name);
+			if (room.gameState.active === true) {
+				sendPlayerReconnectState(socket, name, room);
+				return;
+			}
+			var thirdPlayer = room.playerJoinOrder.length >= 3 ? room.playerJoinOrder[2] : null;
+			if (objectLength(room.players) === 3 && name === thirdPlayer && !room.hostGameOptionsSelected) {
+				socket.emit('option select new', name);
+			} else {
+				socket.emit('wait for start game', name);
+			}
+			return;
 		}
-		else
-		{
-			playerSpc.emit('wait for start game', name);
+
+		emitGame(room.code, 'login name', name);
+		if (room.playerJoinOrder.indexOf(name) === -1) {
+			room.playerJoinOrder.push(name);
 		}
-  	});	
+		room.players[name] = new Player(name);
+		console.log(room.players);
+		if (objectLength(room.players) === 3) {
+			socket.emit('option select new', name);
+		} else {
+			socket.emit('wait for start game', name);
+		}
+	});	
 
   	//TESTS
   	socket.on('buzzer press test', function(playerNameBuzzed){
@@ -501,272 +684,341 @@ playerSpc.on('connection', function(socket){
   		console.log("PLAYER NAMED EXPOSED QUESTION " + playerNameExposed);
   	});
 
-  	//set global turn time, grab game id
-  	socket.on('option select new', function(optionArray){
-  		console.log(optionArray);
-  		ANSWER_TIME = optionArray[0];
-  		DECADE = optionArray[1];
-  		playerSpc.emit('answer time data', ANSWER_TIME);
-  		gameSpc.emit('answer time data', ANSWER_TIME);
-  		selectByDecade(DECADE, function(returnValue) {
-  			GAME_ID = returnValue.game;
-  			AIRDATE = returnValue.airdate;
-  			var tempDate = new Date(AIRDATE);
-  			AIRDATE = formatDate(tempDate);
-  			console.log("GAME_ID: " + GAME_ID + " AIRDATE " + AIRDATE);
-  			setGameDataNew();
+	socket.on('option select new', function (optionArray) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		console.log(optionArray);
+		r.hostGameOptionsSelected = true;
+		r.answerTime = optionArray[0];
+		r.decade = optionArray[1];
+		emitPlayers(r.code, 'answer time data', r.answerTime);
+		emitGame(r.code, 'answer time data', r.answerTime);
+		selectByDecade(r.decade, function (returnValue) {
+			r.gameId = returnValue.game;
+			r.airdate = returnValue.airdate;
+			var tempDate = new Date(r.airdate);
+			r.airdate = formatPlayerOptionDate(tempDate);
+			console.log('GAME_ID: ' + r.gameId + ' AIRDATE ' + r.airdate);
+			setGameDataNew(r);
 		});
-  	});
+	});
 
-  	function formatDate(date) {
-		  var monthNames = [
-		    "January", "February", "March",
-		    "April", "May", "June", "July",
-		    "August", "September", "October",
-		    "November", "December"
-		  ];
+	socket.on('new game', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		emitPlayers(r.code, 'new game');
+	});
 
-		  var day = date.getDate();
-		  var monthIndex = date.getMonth();
-		  var year = date.getFullYear();
+	socket.on('new game ready', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		if (r.pendingHostForcedNewGame) {
+			return;
+		}
+		console.log('NEW GAME COUNTER: ' + r.newGameCounter);
+		r.newGameCounter += 1;
+		if (r.newGameCounter == 3) {
+			emitGame(r.code, 'new game', r.gameData);
+		}
+	});
 
-		  return monthNames[monthIndex] + ' ' + day + ', ' + year;
-	}
+	socket.on('question selected', function (questionId) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.questionTimerCount = 6;
+		console.log('QUESTION SELECTED ID: ' + questionId);
+		r.buzzerFlipped = false;
+		if (r.roundTimer > 0) {
+			r.categorySelectOpen = false;
+			r.clueInProgress = true;
+			r.playerBuzzerUnlocked = false;
+			r.buzzedInPlayerName = undefined;
+			stopTimer(r.buzzedInTimer);
+			r.buzzedInTimer = null;
+			r.buzzedInTimerCount = r.answerTime;
+			r.questionTimer = null;
+			allPlayersNoAnswer(r);
+			r.curQuestionId = questionId;
+			r.playedClueIds.add(questionId);
+			console.log('Question:' + JSON.stringify(r.questions[questionId]));
+			emitGame(r.code, 'question reveal', {
+				question: r.questions[questionId]._question,
+				questionId: questionId,
+				playerName: getPlayerActive(r),
+			});
+			emitPlayers(r.code, 'question reveal', {
+				question: r.questions[questionId]._question,
+				dailyDouble: r.questions[questionId]._dailyDouble,
+				questionId: questionId,
+				playerName: getPlayerActive(r),
+			});
+		}
+	});
 
-  socket.on('new game', function(){
-  	playerSpc.emit('new game');	
-  });
+	socket.on('buzzer pressed', function (playerName) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		console.log('BUZZER PRESSED BY: ' + playerName);
+		if (!r.buzzerFlipped) {
+			console.log('buzzer pressed inside buzzerflip check: ' + playerName);
+			r.buzzerFlipped = true;
+			r.playerBuzzerUnlocked = false;
+			stopTimer(r.questionTimer);
+			if (r.questionTimerCount > 0) {
+				r.buzzedInPlayerName = playerName;
+				emitGame(r.code, 'buzzer pressed', {
+					playerName: playerName,
+					questionId: r.curQuestionId,
+				});
+				r.players[playerName].givenAnswer = true;
+				r.buzzedInTimerCount = r.answerTime;
+				buzzedInBeginCountdown(r);
+			}
+		}
+	});
 
-  socket.on('new game ready', function(){
-  	console.log("NEW GAME COUNTER: " + newGameCounter);
-  	newGameCounter+=1; //used to determine when all 3 player clients have reset their local values
-  	if (newGameCounter == 3){
-  		gameSpc.emit('new game', gameData);
-	}
-  });
-
-  //When active user selects a question
-  socket.on('question selected', function (questionId) {
-  	questionTimerCount = 6;
-  	console.log("QUESTION SELECTED ID: " + questionId);
-  	buzzerFlipped = false;
-  	//TODO: pause timer resume when question is received
-  	if(roundTimer>0)
-  	{
-  		questionTimer = null;
-		allPlayersNoAnswer();
-		curQuestionId  = questionId;
-		playedClueIds.add(questionId);
-		console.log("Question:" + JSON.stringify(questions[questionId]));
-		gameSpc.emit('question reveal', {question: questions[questionId]._question, questionId: questionId, playerName: getPlayerActive()});
-		playerSpc.emit('question reveal', {question: questions[questionId]._question, dailyDouble: questions[questionId]._dailyDouble, questionId: questionId, playerName: getPlayerActive()});
- 	}
-  });
-
-  //When a player buzzes in
-  socket.on('buzzer pressed', function(playerName)
-  {
-  	console.log("BUZZER PRESSED BY: " + playerName);
-  	if (!buzzerFlipped)
-  	{
-  		console.log('buzzer pressed inside buzzerflip check: ' + playerName);
-  		buzzerFlipped = true;
-  		stopTimer(questionTimer);
-		if(questionTimerCount>0)
-  		{
-  			buzzedInPlayerName = playerName;
-		  	gameSpc.emit('buzzer pressed', {playerName: playerName, questionId: curQuestionId});
-		  	players[playerName].givenAnswer = true;
-		  	buzzedInTimerCount = ANSWER_TIME;
-		  	buzzedInBeginCountdown();
-	  	}
-  	}
-  });
-
-  	socket.on('buzzers opened',function(){
-		console.log("buzzers opened");
-		if (questionTimer == null){
-			console.log("should be initiating timer");
-			questionTimer = setInterval(function() {
-			  questionTimerCount--;
-			  playerSpc.emit('update interval', questionTimerCount);
-			  gameSpc.emit('update interval', questionTimerCount);
-			  if (questionTimerCount <= 0) {
-			  		console.log('stopping timer.');
-					stopTimer(questionTimer);
-					//stopTimer(this.int);
-					//questionTimesUp();
-					questionTimer = null;
+	socket.on('buzzers opened', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		console.log('buzzers opened');
+		if (r.questionTimer == null) {
+			console.log('should be initiating timer');
+			r.questionTimer = setInterval(function () {
+				r.questionTimerCount--;
+				emitPlayers(r.code, 'update interval', r.questionTimerCount);
+				emitGame(r.code, 'update interval', r.questionTimerCount);
+				if (r.questionTimerCount <= 0) {
+					console.log('stopping timer.');
+					stopTimer(r.questionTimer);
+					r.questionTimer = null;
 				}
 			}, 1000);
 		}
 	});
 
-  socket.on('player no answer final jeopardy', function(playerName){
-  	players[playerName].score -= final_jeopardy_bet[playerName];
-  });
-
-  	
-  //On answer selection
-  socket.on('answer selection', function (answer) {
-	buzzerFlipped = false;
-	if (answer.finalJeopardyCheck){
-		checkAnswerAsync(answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
-	}
-	else if (buzzedInTimerCount > 0){
-		stopTimer(buzzedInTimer);
-		stopTimer(dailyDoubleTimer);
-		buzzedInTimer = null;
-		dailyDoubleTimer = null;
-		checkAnswerAsync(answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
-  	}
-  });
-
-  var final_jeopardy_bet = new Array();
-  //for daily double bets and final jeopardy
-  socket.on('bet selection', function (bet){
-  	 //set question value to bet
-  	 if (!bet.finalJeopardyCheck)
-  	 {
-	  	 questions[bet.questionId]._value = bet.betValue;
-	  	 playerSpc.emit('daily double response', {playerName: bet.playerName, questionId: bet.questionId, question: questions[bet.questionId]._question, isDailyDouble: true});
-
-	  	 gameSpc.emit('question reveal dd', {question: questions[bet.questionId]._question, questionId: bet.questionId, bet: bet.betValue});
-  	}
-  	else
-  	{
-  		final_jeopardy_bet[bet.playerName] = {playerName: bet.playerName, bet: bet.betValue};
-
-  		gameSpc.emit('final jeopardy response', {playerName: bet.playerName, bet: bet.betValue});
-  	}
-  });
-
-  socket.on('player field fj time out', function(playerName){
-  	console.log("sending data: score  "+  players[playerName].score + "name " + playerName);
-  	var timeOutScore = parseInt(players[playerName].score);
-  	timeOutScore -= parseInt(final_jeopardy_bet[playerName].bet);
-  	gameSpc.emit('score update final jeopardy buzzed out', {playerName: playerName, score: timeOutScore, correct: false, answer:"", buzzedInFJ: false});
-  });
-  //Whenever someone disconnects this piece of code executed
-  socket.on('disconnect', function () {
-    console.log('A user disconnected');
-    if(currentConnections[this.id]){
-   		disconnectedUserNames.push(currentConnections[this.id].username);
-   	}
-   	console.log("DISCONNECTED USERNAME DATA " + disconnectedUserNames);
-  });
-
-	function checkAnswerAsync(answer, questionId, playerName, finalJeopardy) {
-		if (finalJeopardy) {
-			questionId = 'FJ_0_0';
+	socket.on('player no answer final jeopardy', function (playerName) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
 		}
+		var fb = r.finalJeopardyBet[playerName];
+		if (fb && fb.bet !== undefined) {
+			r.players[playerName].score -= fb.bet;
+		}
+	});
 
-		var originalPlayerAnswer = answer.toUpperCase();
-		var originalActualAnswer = questions[questionId]._answer.toUpperCase();
-		var score = players[playerName].score;
-		var value = parseInt(questions[questionId]._value, 10);
-		var correct = false;
+	socket.on('answer selection', function (answer) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		r.buzzerFlipped = false;
+		if (answer.finalJeopardyCheck) {
+			checkAnswerAsync(r, answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
+		} else if (r.buzzedInTimerCount > 0) {
+			stopTimer(r.buzzedInTimer);
+			stopTimer(r.dailyDoubleTimer);
+			r.buzzedInTimer = null;
+			r.dailyDoubleTimer = null;
+			checkAnswerAsync(r, answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
+		}
+	});
 
-		evaluateAnswer({
-			playerAnswer: answer,
-			canonicalAnswer: questions[questionId]._answer,
-			clueText: questions[questionId]._question,
-			lastNameFilePath: lastNameFile,
-			aiEnabled: config.openaiAnswerJudgeEnabled,
-			openaiApiKey: config.openaiApiKey,
-			openaiModel: config.openaiModel,
-			onAiJudgingStart: function () {
-				gameSpc.emit('answer ai judging', {
-					playerName: playerName,
-					questionId: questionId,
-				});
-			},
-		})
-			.then(function (result) {
-				correct = result.correct;
-				if (result.source === 'openai') {
-					console.log(
-						'Answer judged by OpenAI: ' +
-							(correct ? 'correct' : 'incorrect') +
-							(result.aiReason ? ' — ' + result.aiReason : '')
-					);
-				}
-
-				if (finalJeopardy) {
-					value = 0;
-				}
-
-				if (correct) {
-					score += value;
-					setPlayerActive(players[playerName]);
-				} else {
-					score -= value;
-				}
-
-				if (finalJeopardy) {
-					if (correct) {
-						score += parseInt(final_jeopardy_bet[playerName].bet, 10);
-					} else {
-						score -= parseInt(final_jeopardy_bet[playerName].bet, 10);
-					}
-				}
-
-				players[playerName].score = score;
-
-				if (!finalJeopardy) {
-					gameSpc.emit('score update', {
-						score: players[playerName].score,
-						answer: originalPlayerAnswer,
-						playerName: playerName,
-						actualAnswer: originalActualAnswer,
-						dailyDouble: questions[questionId]._dailyDouble,
-						dailyDoubleBet: questions[questionId]._value,
-						questionId: questionId,
-						correct: correct,
-						allPlayersAnswered: checkIfAllPlayersAnswered(),
-					});
-					playerSpc.emit('score update', {
-						score: players[playerName].score,
-						playerName: playerName,
-						questionId: questionId,
-						correct: correct,
-						dailyDouble: questions[questionId]._dailyDouble,
-						dailyDoubleBet: questions[questionId]._value,
-						allPlayersAnswered: checkIfAllPlayersAnswered(),
-					});
-				} else {
-					gameSpc.emit('score update final jeopardy', {
-						score: score,
-						answer: originalPlayerAnswer,
-						playerName: playerName,
-						correct: correct,
-						buzzedInFJ: true,
-					});
-				}
-			})
-			.catch(function (err) {
-				console.error('evaluateAnswer failed', err);
-				gameSpc.emit('answer ai judging end');
+	socket.on('bet selection', function (bet) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		if (!bet.finalJeopardyCheck) {
+			r.questions[bet.questionId]._value = bet.betValue;
+			emitPlayers(r.code, 'daily double response', {
+				playerName: bet.playerName,
+				questionId: bet.questionId,
+				question: r.questions[bet.questionId]._question,
+				isDailyDouble: true,
 			});
-	}
+			emitGame(r.code, 'question reveal dd', {
+				question: r.questions[bet.questionId]._question,
+				questionId: bet.questionId,
+				bet: bet.betValue,
+			});
+		} else {
+			r.finalJeopardyBet[bet.playerName] = { playerName: bet.playerName, bet: bet.betValue };
+			emitGame(r.code, 'final jeopardy response', {
+				playerName: bet.playerName,
+				bet: bet.betValue,
+			});
+		}
+	});
+
+	socket.on('player field fj time out', function (playerName) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		console.log('sending data: score  ' + r.players[playerName].score + 'name ' + playerName);
+		var timeOutScore = parseInt(r.players[playerName].score, 10);
+		timeOutScore -= parseInt(r.finalJeopardyBet[playerName].bet, 10);
+		emitGame(r.code, 'score update final jeopardy buzzed out', {
+			playerName: playerName,
+			score: timeOutScore,
+			correct: false,
+			answer: '',
+			buzzedInFJ: false,
+		});
+	});
+
+	socket.on('disconnect', function () {
+		console.log('A user disconnected');
+		delete playerConnectionBySocketId[socket.id];
+	});
 });
 
+function formatPlayerOptionDate(date) {
+	var monthNames = [
+		'January',
+		'February',
+		'March',
+		'April',
+		'May',
+		'June',
+		'July',
+		'August',
+		'September',
+		'October',
+		'November',
+		'December',
+	];
+	var day = date.getDate();
+	var monthIndex = date.getMonth();
+	var year = date.getFullYear();
+	return monthNames[monthIndex] + ' ' + day + ', ' + year;
+}
 
-  	function setGameDataNew(){
-  		var last_clue_id = 0;
-  		var first_clue_id;
-  		var question_object_ids = {};
-  		var queryQuestions ="SELECT clues.id, clues.game, round, value, category, clue, answer, media \n" +
-			"FROM clues\n" +
-			"JOIN documents ON clues.id = documents.id\n" +
-			"JOIN classifications ON clues.id = classifications.clue_id\n" +
-			"JOIN categories ON classifications.category_id = categories.id\n" +
-			"WHERE clues.game = '" + GAME_ID + "'";
+function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
+	if (finalJeopardy) {
+		questionId = 'FJ_0_0';
+	}
 
-		var queryQuestionsOrder ="SELECT id\n" +
-			"FROM clues\n" +
-			"WHERE game = '" + GAME_ID + "'\n"+
-			"ORDER BY id DESC";
+	var originalPlayerAnswer = answer.toUpperCase();
+	var originalActualAnswer = room.questions[questionId]._answer.toUpperCase();
+	var score = room.players[playerName].score;
+	var value = parseInt(room.questions[questionId]._value, 10);
+	var correct = false;
+
+	evaluateAnswer({
+		playerAnswer: answer,
+		canonicalAnswer: room.questions[questionId]._answer,
+		clueText: room.questions[questionId]._question,
+		lastNameFilePath: lastNameFile,
+		aiEnabled: config.openaiAnswerJudgeEnabled,
+		openaiApiKey: config.openaiApiKey,
+		openaiModel: config.openaiModel,
+		onAiJudgingStart: function () {
+			emitGame(room.code, 'answer ai judging', {
+				playerName: playerName,
+				questionId: questionId,
+			});
+		},
+	})
+		.then(function (result) {
+			correct = result.correct;
+			if (result.source === 'openai') {
+				console.log(
+					'Answer judged by OpenAI: ' +
+						(correct ? 'correct' : 'incorrect') +
+						(result.aiReason ? ' — ' + result.aiReason : '')
+				);
+			}
+
+			if (finalJeopardy) {
+				value = 0;
+			}
+
+			if (correct) {
+				score += value;
+				setPlayerActive(room, room.players[playerName]);
+			} else {
+				score -= value;
+			}
+
+			if (finalJeopardy) {
+				if (correct) {
+					score += parseInt(room.finalJeopardyBet[playerName].bet, 10);
+				} else {
+					score -= parseInt(room.finalJeopardyBet[playerName].bet, 10);
+				}
+			}
+
+			room.players[playerName].score = score;
+
+			if (!finalJeopardy) {
+				emitGame(room.code, 'score update', {
+					score: room.players[playerName].score,
+					answer: originalPlayerAnswer,
+					playerName: playerName,
+					actualAnswer: originalActualAnswer,
+					dailyDouble: room.questions[questionId]._dailyDouble,
+					dailyDoubleBet: room.questions[questionId]._value,
+					questionId: questionId,
+					correct: correct,
+					allPlayersAnswered: checkIfAllPlayersAnswered(room),
+				});
+				emitPlayers(room.code, 'score update', {
+					score: room.players[playerName].score,
+					playerName: playerName,
+					questionId: questionId,
+					correct: correct,
+					dailyDouble: room.questions[questionId]._dailyDouble,
+					dailyDoubleBet: room.questions[questionId]._value,
+					allPlayersAnswered: checkIfAllPlayersAnswered(room),
+				});
+			} else {
+				emitGame(room.code, 'score update final jeopardy', {
+					score: score,
+					answer: originalPlayerAnswer,
+					playerName: playerName,
+					correct: correct,
+					buzzedInFJ: true,
+				});
+			}
+		})
+		.catch(function (err) {
+			console.error('evaluateAnswer failed', err);
+			emitGame(room.code, 'answer ai judging end');
+		});
+}
+
+
+function setGameDataNew(room) {
+		var last_clue_id = 0;
+		var first_clue_id;
+		var question_object_ids = {};
+		var gid = room.gameId;
+		var queryQuestions =
+			'SELECT clues.id, clues.game, round, value, category, clue, answer, media \n' +
+			'FROM clues\n' +
+			'JOIN documents ON clues.id = documents.id\n' +
+			'JOIN classifications ON clues.id = classifications.clue_id\n' +
+			'JOIN categories ON classifications.category_id = categories.id\n' +
+			"WHERE clues.game = '" +
+			gid +
+			"'";
+
+		var queryQuestionsOrder =
+			'SELECT id\n' + 'FROM clues\n' + "WHERE game = '" + gid + "'\n" + 'ORDER BY id DESC';
 
 	
 		var round_1_values = [
@@ -861,75 +1113,120 @@ playerSpc.on('connection', function(socket){
 						var answerStrip = parseAnswer(tempQuestion.answer);
 						tempQuestion.answer = answerStrip;
 						tempQuestion.mediaType = mediaType;
-			        	questions[this_question_id] = tempQuestion;
+			        	room.questions[this_question_id] = tempQuestion;
 
 			        	if (tempQuestion.dailyDouble == true){
 			        		console.log("\n THIS QUESTION IS A DAILY DOUBLE: " + tempQuestion.questionId + "\n");
 			        	}
 			        }
 
-			        downloadImages();
-			       console.log("THIS GAMES QUESTIONS: " + JSON.stringify(questions));
+			        downloadImages(room);
+			       console.log('THIS GAMES QUESTIONS: ' + JSON.stringify(room.questions));
 			    }
 			  });
   		});
-  	}
-
-  	function downloadImages(){
-  		  for(question in questions){
-  			var mediaLink = questions[question].mediaLink;
-  			mediaLink = mediaLink.trim();
-  			console.log("MEDIA LINK on question loop: /" + mediaLink + "/");
-  			if (mediaLink)
-  			{
-  				var url_img_name = mediaLink;
-  				//console.log(JSON.stringify(questions[question]));
-  				url_img_name = url_img_name.split("/media/");
-  				var filePath = "/temp-media/" +  questions[question].mediaType + "/" + url_img_name[1];
-				if(false)
-				{
-					console.log("doesn't need download");
-					questions[question].mediaLink = filePath;
-					gameSpc.emit('game data', {questionID: questions[question].questionId, question: questions[question]});
-				}
-				else
-				{
-					console.log(questions[question]);
-					(function(_question, _filePath, _url_img_name){
-
-						console.log('QUESTION inside fs check ' + _question);
-						console.log('URL_IMG_NAME ' + _url_img_name);
-						console.log('FILE PATH ' + _filePath);
-					  	download(_question.mediaLink, _url_img_name, function(){ //download images, once callback is completed for every image begin game
-							console.log('done download');
-							_question.mediaLink = _filePath;
-							gameSpc.emit('game data', {questionID: _question.questionId, question: _question});
-						}, _question.mediaType);
-					})(questions[question], filePath, url_img_name[1]);
-				}
-  			}
-  			else
-			{
-	  			gameSpc.emit('game data', {questionID: questions[question].questionId, question: questions[question]});
-			}
-  	 	}
-  	}
-
-function openTheBuzzer(){
-	console.log("should be continuing countdown");
-	playerSpc.emit('open buzzer');
 }
 
-function loadGame(name, socket, players){
-	console.log("player attempting to rejoin with name " + name);
-	console.log("players is " + players);
-	gameState = {"active": gameState["active"],
-	"final-jeopardy-check": finalJeopardyCheck,
-	"buzzed-in-player-name": buzzedInPlayerName,
-	"active-player-name": curActivePlayer,
-	"players": players,
-	"player-name": name};
-	socket.emit('update-state-reload', gameState);
+function downloadImages(room) {
+	for (var question in room.questions) {
+		var mediaLink = room.questions[question].mediaLink;
+		mediaLink = mediaLink.trim();
+		console.log('MEDIA LINK on question loop: /' + mediaLink + '/');
+		if (mediaLink) {
+			var url_img_name = mediaLink;
+			url_img_name = url_img_name.split('/media/');
+			var filePath =
+				'/temp-media/' + room.questions[question].mediaType + '/' + url_img_name[1];
+			if (false) {
+				console.log("doesn't need download");
+				room.questions[question].mediaLink = filePath;
+				emitGame(room.code, 'game data', {
+					questionID: room.questions[question].questionId,
+					question: room.questions[question],
+				});
+			} else {
+				console.log(room.questions[question]);
+				(function (_question, _filePath, _url_img_name, r) {
+					console.log('QUESTION inside fs check ' + _question);
+					console.log('URL_IMG_NAME ' + _url_img_name);
+					console.log('FILE PATH ' + _filePath);
+					download(_question.mediaLink, _url_img_name, function () {
+						console.log('done download');
+						_question.mediaLink = _filePath;
+						emitGame(r.code, 'game data', {
+							questionID: _question.questionId,
+							question: _question,
+						});
+					}, _question.mediaType);
+				})(room.questions[question], filePath, url_img_name[1], room);
+			}
+		} else {
+			emitGame(room.code, 'game data', {
+				questionID: room.questions[question].questionId,
+				question: room.questions[question],
+			});
+		}
+	}
+}
+
+function openTheBuzzer(room) {
+	console.log('should be continuing countdown');
+	room.playerBuzzerUnlocked = true;
+	emitPlayers(room.code, 'open buzzer');
+}
+
+function returnToBoardPickerState(room) {
+	room.clueInProgress = false;
+	room.categorySelectOpen = false;
+}
+
+function sendPlayerReconnectState(socket, name, room) {
+	var p = room.players[name];
+	var score = p ? p.score : 0;
+	var activeName = getPlayerActive(room);
+	var fjq = room.questions['FJ_0_0'];
+	var fjBetEntry = room.finalJeopardyBet[name];
+	var fjBetRecorded =
+		fjBetEntry && fjBetEntry.bet !== undefined && fjBetEntry.bet !== null
+			? fjBetEntry.bet
+			: null;
+
+	var payload = {
+		'player-name': name,
+		'player-score': score,
+		'active-player-name': activeName == null ? '' : activeName,
+		'final-jeopardy-check': room.finalJeopardyCheck,
+		'final-jeopardy-wagering':
+			room.finalJeopardyCheck &&
+			room.finalJeopardyWageringPhase &&
+			!room.finalJeopardyAnswerPhase,
+		'final-jeopardy-answer':
+			room.finalJeopardyCheck && room.finalJeopardyAnswerPhase,
+		'final-jeopardy-category': fjq ? fjq._category : '',
+		'final-jeopardy-question': fjq ? fjq._question : '',
+		'final-jeopardy-player-bet': fjBetRecorded,
+		'buzzed-in-player-name': room.buzzedInPlayerName,
+		active: room.gameState.active === true,
+		'round-timer': room.roundTimer,
+		'answer-time': room.answerTime,
+		'game-markup': room.lastPlayerBoardMarkup,
+		'category-select-open': room.categorySelectOpen,
+		'played-question-ids': Array.from(room.playedClueIds),
+	};
+	var qReconnect = room.questions[room.curQuestionId];
+	var clueOk =
+		room.clueInProgress && !!qReconnect && !room.finalJeopardyCheck;
+	payload['clue-in-progress'] = clueOk;
+	if (clueOk) {
+		payload['cur-question-id'] = room.curQuestionId;
+		payload['question-text'] = qReconnect._question;
+		payload['daily-double'] = !!qReconnect._dailyDouble;
+		payload['question-timer-count'] = room.questionTimerCount;
+		payload['buzzer-flipped'] = room.buzzerFlipped;
+		payload['player-buzzer-unlocked'] = room.playerBuzzerUnlocked;
+		payload['buzzed-in-timer-count'] = room.buzzedInTimerCount;
+	}
+	socket.emit('update-state-reload', payload);
 }	
 
 function objectLength( object ) {
@@ -942,110 +1239,96 @@ function objectLength( object ) {
     return length;
 };
 
-function changeActivePlayerNewRound(){
+function changeActivePlayerNewRound(room) {
 	var lowestScore = 999999;
 	var playerLow;
-	
-	for (player in players)
-	{
-		if (players[player].score < lowestScore)
-		{	
-			lowestScore = players[player].score;
-			playerLow = players[player];
+
+	for (var player in room.players) {
+		if (room.players[player].score < lowestScore) {
+			lowestScore = room.players[player].score;
+			playerLow = room.players[player];
 		}
 	}
-	console.log("LOWEST SCORING PLAYER: " + playerLow);
-	setPlayerActive(players[playerLow._name]);
+	console.log('LOWEST SCORING PLAYER: ' + playerLow);
+	setPlayerActive(room, room.players[playerLow._name]);
 }
 
-function questionBeginCountdown()
-{ 
-	if (questionTimer == null){
-		questionTimer = setInterval(function() {
-		  questionTimerCount--;
-		  playerSpc.emit('update interval', questionTimerCount);
-		  gameSpc.emit('update interval', questionTimerCount);
-		  if (questionTimerCount <= 0) {
-		  		console.log('stopping timer.');
-				stopTimer(questionTimer);
-				//stopTimer(this.int);
-				//questionTimesUp();
-				questionTimer = null;
+function questionBeginCountdown(room) {
+	if (room.questionTimer == null) {
+		room.questionTimer = setInterval(function () {
+			room.questionTimerCount--;
+			emitPlayers(room.code, 'update interval', room.questionTimerCount);
+			emitGame(room.code, 'update interval', room.questionTimerCount);
+			if (room.questionTimerCount <= 0) {
+				console.log('stopping timer.');
+				stopTimer(room.questionTimer);
+				room.questionTimer = null;
 			}
 		}, 1000);
 	}
 }
 
-function questionContinueCountdown()
-{ 
-	clearInterval(questionTimer);
-	questionTimer = null;
-	openTheBuzzer();
+function questionContinueCountdown(room) {
+	clearInterval(room.questionTimer);
+	room.questionTimer = null;
+	openTheBuzzer(room);
 }
 
-function questionTimesUp(){
- 	playerSpc.emit('question disappear', curQuestionId);
-
- 	playerSpc.emit('active player', {playerName: getPlayerActive(), correct: false, newGame: "no"});
- 	gameSpc.emit('active player', {newGame: false, playerName: getPlayerActive()});
+function questionTimesUp(room) {
+	emitPlayers(room.code, 'question disappear', room.curQuestionId);
+	returnToBoardPickerState(room);
+	emitPlayers(room.code, 'active player', {
+		playerName: getPlayerActive(room),
+		correct: false,
+		newGame: 'no',
+	});
+	emitGame(room.code, 'active player', {
+		newGame: false,
+		playerName: getPlayerActive(room),
+	});
 }
 
-function setPlayerActive(playerActive)
-{
-	console.log("PLAYER ACTIVE " + playerActive);
+function setPlayerActive(room, playerActive) {
+	console.log('PLAYER ACTIVE ' + playerActive);
 	playerActive.isActive = true;
 
-	for (player in players)
-	{
-		if (players[player] != playerActive)
-		{
-			players[player].isActive = false;
-		}
-		else{
-			players[player].isActive = true;	
+	for (var player in room.players) {
+		if (room.players[player] != playerActive) {
+			room.players[player].isActive = false;
+		} else {
+			room.players[player].isActive = true;
 		}
 	}
 }
 
-function getPlayerActive()
-{
-	for (player in players)
-	{
-		if (players[player].active == true)
-		{	
-			return players[player].name;
+function getPlayerActive(room) {
+	for (var player in room.players) {
+		if (room.players[player].active == true) {
+			return room.players[player].name;
 		}
 	}
 }
 
-function checkIfAllPlayersAnswered(){
-	 var increment = 0;
+function checkIfAllPlayersAnswered(room) {
+	var increment = 0;
 
-  	for (player in players)
-  	{
-  		if (players[player].givenAnswer == true)
-  		{
-  			increment++;
-  		}
-  	}
+	for (var player in room.players) {
+		if (room.players[player].givenAnswer == true) {
+			increment++;
+		}
+	}
 
-  	if(increment >= 3)
-  	{
-  		return true;
-  	}
+	if (increment >= 3) {
+		return true;
+	}
 
-  	else
-  	{
-  		return false;
-  	}
+	return false;
 }
 
-function allPlayersNoAnswer()
-{
-	 for (player in players)
-  	{
-  		players[player].givenAnswer = false;
-  	}
+function allPlayersNoAnswer(room) {
+	for (var player in room.players) {
+		room.players[player].givenAnswer = false;
+	}
 }
 
 function selectByDecade(decade, callback){
@@ -1133,95 +1416,121 @@ function stopTimer(timer){
 }
 
 
-//PLAYER SOCKET 
-
-function buzzedInBeginCountdown()
-	{
-		if (buzzedInTimer == null){
-			buzzedInTimer = setInterval(function(){
-				buzzedInTimerCount--;
-				playerSpc.emit('update buzzer interval', {buzzedInTimerCount: buzzedInTimerCount, buzzedInPlayerName: buzzedInPlayerName});
-	    		if (buzzedInTimerCount === 0) {
-					stopTimer(buzzedInTimer);
-					buzzedInTimer = null;
-					buzzedInTimesUp();
-					if (isSecondRound && roundTimer<=0){
-						finalJeopardyCheck = true;
-						console.log("FINAL JEOPARDY CHECK TRUE");
-					}
-				}
-			}, 1000);
-		}
-	}
-
-	//when a player runs out of time
-
-	function buzzedInTimesUp(){
-	  	buzzerFlipped = false;
-  		var value = questions[curQuestionId]._value;
-  		players[buzzedInPlayerName].score -= value;
-
-  		playerSpc.emit('buzzed in times up', {dailyDouble: questions[curQuestionId].dailyDouble, score: players[buzzedInPlayerName].score, curQuestionId: curQuestionId, playerName: buzzedInPlayerName, allPlayersAnswered: checkIfAllPlayersAnswered()});		
-													
-  		gameSpc.emit('buzzed in times up', {dailyDouble: questions[curQuestionId].dailyDouble, questionId:curQuestionId, score: players[buzzedInPlayerName].score, playerName: buzzedInPlayerName, actualAnswer: questions[curQuestionId]._answer , allPlayersAnswered: checkIfAllPlayersAnswered()});
-	}
-
-//GAME "HOST SCREEN" SOCKET
-
-    function dailyDoubleBeginCountdown(playerName)
-	{
-		if (dailyDoubleTimer == null)
-		{
-			dailyDoubleTimer = setInterval(function(){
-				dailyDoubleTimerCount--;
-				playerSpc.emit('update daily double interval', {dailyDoubleTimerCount: dailyDoubleTimerCount, dailyDoublePlayerName: getPlayerActive(), answerTime: ANSWER_TIME});
-	    		if (dailyDoubleTimerCount === 0) {
-					stopTimer(dailyDoubleTimer);
-					dailyDoubleTimer = null;
-					dailyDoubleTimesUp();
-					if (isSecondRound && roundTimer<=0){
-						finalJeopardyCheck = true;
-					}
-				}
-			}, 1000);
-		}
-	}
-
-	function dailyDoubleTimesUp(){
-		buzzerFlipped = false;
-  		var value = questions[curQuestionId]._value;
-  		players[getPlayerActive()].score -= value;
-
-  		playerSpc.emit('buzzed in times up', {dailyDouble: true/*questions[curQuestionId].dailyDouble*/, score: players[getPlayerActive()].score, curQuestionId: curQuestionId, playerName: getPlayerActive(), allPlayersAnswered: true});		
-													
-  		gameSpc.emit('buzzed in times up', {dailyDouble: true/*questions[curQuestionId].dailyDouble*/, questionId:curQuestionId, score: players[getPlayerActive()].score, playerName: getPlayerActive(), actualAnswer: questions[curQuestionId]._answer , allPlayersAnswered: true, dailyDoubleWager: questions[curQuestionId]._value});
-	}
-
-	function setRoundTimer()
-	{
-		roundTimerObject = setInterval(function () {
-			gameSpc.emit('update round interval', {
-				roundTimer: roundTimer,
-				round: isSecondRound,
-				activePlayerName: getPlayerActive(),
+function buzzedInBeginCountdown(room) {
+	if (room.buzzedInTimer == null) {
+		room.buzzedInTimer = setInterval(function () {
+			room.buzzedInTimerCount--;
+			emitPlayers(room.code, 'update buzzer interval', {
+				buzzedInTimerCount: room.buzzedInTimerCount,
+				buzzedInPlayerName: room.buzzedInPlayerName,
 			});
-			playerSpc.emit('update round interval', roundTimer);
-
-			if (roundTimer === 0) {
-				playerSpc.emit('close category select');
-				stopTimer(roundTimerObject);
-				roundTimerObject = null;
-				if (isSecondRound && roundTimer <= 0) {
-					finalJeopardyCheck = true;
+			if (room.buzzedInTimerCount === 0) {
+				stopTimer(room.buzzedInTimer);
+				room.buzzedInTimer = null;
+				buzzedInTimesUp(room);
+				if (room.isSecondRound && room.roundTimer <= 0) {
+					room.finalJeopardyCheck = true;
+					console.log('FINAL JEOPARDY CHECK TRUE');
 				}
-				if (!isSecondRound) {
-					isSecondRound = true;
-				}
-				return;
 			}
-			roundTimer--;
 		}, 1000);
 	}
+}
+
+function buzzedInTimesUp(room) {
+	room.buzzerFlipped = false;
+	var value = room.questions[room.curQuestionId]._value;
+	room.players[room.buzzedInPlayerName].score -= value;
+
+	emitPlayers(room.code, 'buzzed in times up', {
+		dailyDouble: room.questions[room.curQuestionId].dailyDouble,
+		score: room.players[room.buzzedInPlayerName].score,
+		curQuestionId: room.curQuestionId,
+		playerName: room.buzzedInPlayerName,
+		allPlayersAnswered: checkIfAllPlayersAnswered(room),
+	});
+
+	emitGame(room.code, 'buzzed in times up', {
+		dailyDouble: room.questions[room.curQuestionId].dailyDouble,
+		questionId: room.curQuestionId,
+		score: room.players[room.buzzedInPlayerName].score,
+		playerName: room.buzzedInPlayerName,
+		actualAnswer: room.questions[room.curQuestionId]._answer,
+		allPlayersAnswered: checkIfAllPlayersAnswered(room),
+	});
+}
+
+function dailyDoubleBeginCountdown(room) {
+	if (room.dailyDoubleTimer == null) {
+		room.dailyDoubleTimer = setInterval(function () {
+			room.dailyDoubleTimerCount--;
+			emitPlayers(room.code, 'update daily double interval', {
+				dailyDoubleTimerCount: room.dailyDoubleTimerCount,
+				dailyDoublePlayerName: getPlayerActive(room),
+				answerTime: room.answerTime,
+			});
+			if (room.dailyDoubleTimerCount === 0) {
+				stopTimer(room.dailyDoubleTimer);
+				room.dailyDoubleTimer = null;
+				dailyDoubleTimesUp(room);
+				if (room.isSecondRound && room.roundTimer <= 0) {
+					room.finalJeopardyCheck = true;
+				}
+			}
+		}, 1000);
+	}
+}
+
+function dailyDoubleTimesUp(room) {
+	room.buzzerFlipped = false;
+	var value = room.questions[room.curQuestionId]._value;
+	var activeName = getPlayerActive(room);
+	room.players[activeName].score -= value;
+
+	emitPlayers(room.code, 'buzzed in times up', {
+		dailyDouble: true,
+		score: room.players[activeName].score,
+		curQuestionId: room.curQuestionId,
+		playerName: activeName,
+		allPlayersAnswered: true,
+	});
+
+	emitGame(room.code, 'buzzed in times up', {
+		dailyDouble: true,
+		questionId: room.curQuestionId,
+		score: room.players[activeName].score,
+		playerName: activeName,
+		actualAnswer: room.questions[room.curQuestionId]._answer,
+		allPlayersAnswered: true,
+		dailyDoubleWager: room.questions[room.curQuestionId]._value,
+	});
+}
+
+function setRoundTimer(room) {
+	room.roundTimerObject = setInterval(function () {
+		emitGame(room.code, 'update round interval', {
+			roundTimer: room.roundTimer,
+			round: room.isSecondRound,
+			activePlayerName: getPlayerActive(room),
+		});
+		emitPlayers(room.code, 'update round interval', room.roundTimer);
+
+		if (room.roundTimer === 0) {
+			room.categorySelectOpen = false;
+			emitPlayers(room.code, 'close category select');
+			stopTimer(room.roundTimerObject);
+			room.roundTimerObject = null;
+			if (room.isSecondRound && room.roundTimer <= 0) {
+				room.finalJeopardyCheck = true;
+			}
+			if (!room.isSecondRound) {
+				room.isSecondRound = true;
+			}
+			return;
+		}
+		room.roundTimer--;
+	}, 1000);
+}
 
 http.listen(config.port, function () {
 	console.log('listening on *:' + config.port);

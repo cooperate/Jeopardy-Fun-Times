@@ -132,12 +132,97 @@ $(document).ready(function() {
 		hostSoundMutedStored === null ? true : hostSoundMutedStored === '1';
 	/* Each full page load needs one click on the sound control before the browser allows audio */
 	var hostPageAudioPrimed = false;
+	/** When TTS is skipped (muted or sound not yet enabled), defer voice-completion callbacks so answer/reveal screens are not instant */
+	var HOST_SILENT_VOICE_HOLD_MS = 4000;
 
 	var skipGameDataAfterHostRestore = false;
 	var hostRestoreSuppress = false;
 
 	//Speech Synthesis
 	var synth = window.speechSynthesis;
+	var cachedHostNarrationVoice = null;
+
+	function langLower(voice) {
+		return (voice.lang || '').replace(/_/g, '-').toLowerCase();
+	}
+
+	function isSpanishVoice(voice) {
+		var l = langLower(voice);
+		if (l === 'es' || l.indexOf('es-') === 0) {
+			return true;
+		}
+		var n = (voice.name || '').toLowerCase();
+		return /spanish|español|espanol|castellano/.test(n);
+	}
+
+	function isEnglishVoice(voice) {
+		return langLower(voice).indexOf('en') === 0;
+	}
+
+	function isUsEnglishVoice(voice) {
+		var l = langLower(voice);
+		return l === 'en-us' || l.indexOf('en-us-') === 0;
+	}
+
+	/** Prefer en-US and typical US female / neutral-female TTS names (Chrome, Edge, macOS) */
+	function femaleFriendlyScore(voice) {
+		var n = (voice.name || '').toLowerCase();
+		if (/zira|samantha|susan|karen|victoria|female|google us english|microsoft aria|moira|fiona|tessa|serena|allison|ava\b/.test(n)) {
+			return 2;
+		}
+		if (/male|david|daniel|fred\b|mark\b|google uk english male/.test(n)) {
+			return -2;
+		}
+		return 0;
+	}
+
+	function pickHostNarrationVoice(voices) {
+		if (!voices || !voices.length) {
+			return null;
+		}
+		var candidates = voices.filter(function (v) {
+			return isEnglishVoice(v) && !isSpanishVoice(v);
+		});
+		if (!candidates.length) {
+			candidates = voices.filter(function (v) {
+				return !isSpanishVoice(v);
+			});
+		}
+		if (!candidates.length) {
+			candidates = voices.slice();
+		}
+		var usPool = candidates.filter(isUsEnglishVoice);
+		var pool = usPool.length ? usPool : candidates;
+		pool.sort(function (a, b) {
+			return femaleFriendlyScore(b) - femaleFriendlyScore(a);
+		});
+		return pool[0];
+	}
+
+	function getHostNarrationVoice() {
+		var voices = synth.getVoices();
+		if (!voices || !voices.length) {
+			return null;
+		}
+		if (cachedHostNarrationVoice) {
+			var c = cachedHostNarrationVoice;
+			for (var i = 0; i < voices.length; i++) {
+				if (voices[i].voiceURI === c.voiceURI && voices[i].name === c.name) {
+					cachedHostNarrationVoice = voices[i];
+					return voices[i];
+				}
+			}
+			cachedHostNarrationVoice = null;
+		}
+		cachedHostNarrationVoice = pickHostNarrationVoice(voices);
+		return cachedHostNarrationVoice;
+	}
+
+	if (synth && typeof synth.addEventListener === 'function') {
+		synth.addEventListener('voiceschanged', function () {
+			cachedHostNarrationVoice = null;
+		});
+	}
 
 	var Queue = (function(){
 
@@ -183,6 +268,19 @@ $(document).ready(function() {
 
 	var animationQueue = new Queue();
 
+	function normalizeHostRoomCode(s) {
+		return String(s || '')
+			.trim()
+			.toUpperCase()
+			.replace(/[^A-Z0-9]/g, '');
+	}
+
+	var hostPathMatch = window.location.pathname.match(/^\/game\/([^/]+)\/?$/);
+	var hostRoomCode = hostPathMatch ? normalizeHostRoomCode(hostPathMatch[1]) : '';
+	if (!hostRoomCode) {
+		window.location.replace('/game');
+		return;
+	}
 
 	//set css for various game elements
 	$('#question_field').css('display', 'none');
@@ -194,7 +292,26 @@ $(document).ready(function() {
 	$('.player_name_bubble').hide();
 
 
-	var socket = io('/game');
+	var socket = io('/game', { query: { room: hostRoomCode } });
+
+	socket.on('host room error', function (payload) {
+		var msg = payload && payload.message ? payload.message : 'This room is not available.';
+		if (typeof SimpleModal !== 'undefined' && SimpleModal.alert) {
+			SimpleModal.alert({ title: 'Host', text: msg, type: 'error' }).then(function () {
+				window.location.replace('/game');
+			});
+		} else {
+			window.alert(msg);
+			window.location.replace('/game');
+		}
+	});
+
+	socket.on('host room code', function (payload) {
+		var code = typeof payload === 'string' ? payload : payload && payload.code;
+		if (code) {
+			$('#host_room_code_value').text(code);
+		}
+	});
 
 	function showHostAiJudging(playerName) {
 		var wrap = $('#host_ai_judging');
@@ -260,6 +377,7 @@ $(document).ready(function() {
 	    player_login_count++
 	    $("#player_name_bubble_" + player_login_count).append("<h2>" + name + "</h2>");
 	    $("#player_name_bubble_" + player_login_count).fadeIn();
+	    updateHostJoinedPlayersPanelFromLocalState();
      });
 
 	 socket.on('answer time data', function(answerTimeData){
@@ -318,7 +436,12 @@ $(document).ready(function() {
     	for (c=0; c<6; c++)
     	{
     		console.log("CONTENT BOARD " + roundMarkerId + c + "_" + "_0");
-    		contentBoard += "<th>"  +  questionList[roundMarkerId + c + "_0"].category + "</th>";
+    		var catTitle = String(questionList[roundMarkerId + c + "_0"].category)
+    			.replace(/&/g, '&amp;')
+    			.replace(/</g, '&lt;')
+    			.replace(/>/g, '&gt;')
+    			.replace(/"/g, '&quot;');
+    		contentBoard += "<th><span class=\"category-header-text\"><span class=\"category-header-text__inner\">" + catTitle + "</span></span></th>";
     		categories.push(questionList[roundMarkerId + c + "_0"].category);
     	}
 
@@ -350,6 +473,74 @@ $(document).ready(function() {
     	$('#game_board_container').html(contentBoard);
     	$('#game_board_container tr td').css('color', 'transparent');
     	$('#game_board_container tr td').css('textShadow', 'none');
+    	if (typeof scheduleJeopardyCategoryHeaderFit === 'function') {
+    		scheduleJeopardyCategoryHeaderFit(document.getElementById('game_board_container'));
+    	}
+	}
+
+	function rebuildHostPlayersTableFromSnapshot(snapshot) {
+		if (!snapshot || !snapshot.players) {
+			return;
+		}
+		$('#players_table').empty();
+		playerCount = 0;
+		nameIds = {};
+		playerNames = [];
+		var pi;
+		for (pi = 0; pi < snapshot.players.length; pi++) {
+			buildPlayerBox(snapshot.players[pi].name);
+			$('#name_' + nameIds[snapshot.players[pi].name]).html(snapshot.players[pi].score);
+		}
+		player_login_count = snapshot.players.length;
+	}
+
+	function updateHostJoinedPlayersPanel(players) {
+		var el = $('#host_player_roster_names');
+		if (!el.length) {
+			return;
+		}
+		if (!players || !players.length) {
+			el.html('None yet — open <code>/player</code> on each phone.');
+			return;
+		}
+		var names = [];
+		var i;
+		for (i = 0; i < players.length; i++) {
+			names.push(players[i].name);
+		}
+		el.text(names.join(', '));
+	}
+
+	function updateHostJoinedPlayersPanelFromLocalState() {
+		var list = [];
+		var i;
+		for (i = 0; i < playerNames.length; i++) {
+			list.push({ name: playerNames[i] });
+		}
+		updateHostJoinedPlayersPanel(list);
+	}
+
+	function restoreIntroNameBubblesFromSnapshot(players) {
+		var b;
+		for (b = 1; b <= 3; b++) {
+			$('#player_name_bubble_' + b).empty().hide();
+		}
+		if (!players || !players.length) {
+			return;
+		}
+		var j;
+		for (j = 0; j < players.length && j < 3; j++) {
+			$('#player_name_bubble_' + (j + 1))
+				.append($('<h2>').text(players[j].name))
+				.fadeIn();
+		}
+	}
+
+	/** When the game has not started (or questions are not loaded), full applyHostSnapshot is skipped — still sync roster from the server. */
+	function syncHostLobbyRosterFromSnapshot(snapshot) {
+		rebuildHostPlayersTableFromSnapshot(snapshot);
+		updateHostJoinedPlayersPanel(snapshot.players || []);
+		restoreIntroNameBubblesFromSnapshot(snapshot.players || []);
 	}
 
 	function applyHostSnapshot(snapshot) {
@@ -377,16 +568,7 @@ $(document).ready(function() {
 			);
 			questionList[qid].mediaType = q._mediaType;
 		}
-		$('#players_table').empty();
-		playerCount = 0;
-		nameIds = {};
-		playerNames = [];
-		var pi;
-		for (pi = 0; pi < snapshot.players.length; pi++) {
-			buildPlayerBox(snapshot.players[pi].name);
-			$('#name_' + nameIds[snapshot.players[pi].name]).html(snapshot.players[pi].score);
-		}
-		player_login_count = snapshot.players.length;
+		rebuildHostPlayersTableFromSnapshot(snapshot);
 
 		var roundName =
 			snapshot.boardRound === 'Double Jeopardy' ? 'Double Jeopardy' : 'Jeopardy';
@@ -427,12 +609,22 @@ $(document).ready(function() {
 		}
 
 		if (snapshot.finalJeopardyCheck) {
-			postScreenMessage(
-				'Final Jeopardy — host view restored. Use player devices to continue.',
-				false,
-				0
-			);
+			var fjMsg =
+				'Final Jeopardy — host view restored. Player phones should show the wager or clue again after they refresh or reconnect.';
+			if (snapshot.finalJeopardyAnswerPhase) {
+				fjMsg += ' <b>Answer phase</b> is active on the server.';
+			} else if (snapshot.finalJeopardyWageringPhase) {
+				fjMsg += ' <b>Wager phase</b> is active on the server.';
+			} else {
+				fjMsg +=
+					' The host has not opened wagers yet (or audio is still playing); players see a short wait message.';
+			}
+			fjMsg +=
+				' If the room is stuck, use <b>New game</b> (button under the room code) to reset everyone.';
+			postScreenMessage(fjMsg, false, 0);
 		}
+
+		updateHostJoinedPlayersPanel(snapshot.players || []);
 
 		setTimeout(function () {
 			hostRestoreSuppress = false;
@@ -441,8 +633,17 @@ $(document).ready(function() {
 	}
 
 	socket.on('host state snapshot', function (snapshot) {
-		if (applyHostSnapshot(snapshot)) {
+		if (!snapshot) {
+			return;
+		}
+		var full = applyHostSnapshot(snapshot);
+		if (full) {
 			console.log('Host UI restored from server snapshot');
+			return;
+		}
+		syncHostLobbyRosterFromSnapshot(snapshot);
+		if (snapshot.players && snapshot.players.length > 0) {
+			console.log('Host player roster synced (lobby or board not in snapshot yet)');
 		}
 	});
 
@@ -1469,42 +1670,54 @@ $(document).ready(function() {
     	var category;
     	var index = 0;
     	var message;
+    	var $cc = $('#category_container');
 
     	playSound(openUpSound);
-    	$("#category_container").slideDown();
 
-    	for(category in categories)  //append names to each div in category
-    	{
-    		$("#cat_" + category).html("<div class='secure_category_container'><h2>" + categories[category] + "</h2></div>")
+    	for (category in categories) {
+    		$('#cat_' + category).html("<div class='secure_category_container'><h2>" + categories[category] + '</h2></div>');
     	}
-    	//animate through each
-    	$("#category_container").cycle({
-    		fx: 'scrollRight',
-    		next: "#category_container",
-    		speed:    100,
-    		timeout: 3000,
-    		after: function(){
-    			messageToVoice(categories[index].toLowerCase(), false);
-    			index++;
-    		},
-    		height: 'auto',
-    		easing:  'easeInOutBack',
-    		autostop: 1,
-    		end: function(options)
-    		{
-    			$('#category_container').cycle('stop');
-    			playSound(openUpSound);
-    			$("#category_container").slideUp('fast', function(){
-    				postScreenMessage(playerName + ", you have the board.", true, 2000);
-	    			message =  playerName + ", you have the board.";
-				  	messageToVoice(message, true, function(){
-				  		playSound(chooseCategoryTheme);
-				  		flashActiveOn(activePlayerName);
-				  	});
-				  	socket.emit('begin round timer');
-				  	socket.emit('open question category new round'); // this isn't very appropriate naming
-    			});
+
+    	// Start cycle only after the container is visible: jQuery Cycle measures hidden slides as
+    	// width 0, then slideResize shrinks later slides so category text stops being centered.
+    	$cc.slideDown(function () {
+    		var cw = $cc.width();
+    		var ch = $cc.height();
+    		if (!cw || !ch) {
+    			cw = $(window).width();
+    			ch = $(window).height();
     		}
+    		$cc.cycle({
+    			fx: 'scrollRight',
+    			next: '#category_container',
+    			speed: 100,
+    			timeout: 3000,
+    			after: function () {
+    				messageToVoice(categories[index].toLowerCase(), false);
+    				index++;
+    			},
+    			fit: true,
+    			width: cw,
+    			height: ch,
+    			slideResize: false,
+    			containerResize: false,
+    			easing: 'easeInOutBack',
+    			autostop: 1,
+    			end: function () {
+    				$cc.cycle('stop');
+    				playSound(openUpSound);
+    				$cc.slideUp('fast', function () {
+    					postScreenMessage(playerName + ', you have the board.', true, 2000);
+    					message = playerName + ', you have the board.';
+    					messageToVoice(message, true, function () {
+    						playSound(chooseCategoryTheme);
+    						flashActiveOn(activePlayerName);
+    					});
+    					socket.emit('begin round timer');
+    					socket.emit('open question category new round');
+    				});
+    			},
+    		});
     	});
     }
 	function moveActiveIndicator(name)
@@ -1695,6 +1908,17 @@ $(document).ready(function() {
 	});
 	updateHostSoundToggleUi();
 
+	$('#host_new_game_btn').on('click', function () {
+		if (
+			!window.confirm(
+				'Start a new game? This resets scores and loads a fresh board for the host and all three player phones.'
+			)
+		) {
+			return;
+		}
+		socket.emit('host request new game');
+	});
+
     //loop the theme if it ends
     jeopardyIntroMusic.addEventListener('ended', function() {
     	if (hostSoundMuted || !hostPageAudioPrimed) {
@@ -1835,7 +2059,7 @@ $(document).ready(function() {
     {
 		if (hostSoundMuted || !hostPageAudioPrimed) {
 			if (needsCallback && typeof callback === 'function') {
-				callback();
+				setTimeout(callback, HOST_SILENT_VOICE_HOLD_MS);
 			}
 			return;
 		}
@@ -1874,9 +2098,14 @@ $(document).ready(function() {
 		msg.rate = 0.9; // 0.1 to 10
 		window.speechSynthesis.speak(msg);*/
 
-		var voices = synth.getVoices();
 		var utterThis = new SpeechSynthesisUtterance(message);
-		utterThis.voice = voices[4];
+		var narrationVoice = getHostNarrationVoice();
+		if (narrationVoice) {
+			utterThis.voice = narrationVoice;
+			utterThis.lang = narrationVoice.lang || 'en-US';
+		} else {
+			utterThis.lang = 'en-US';
+		}
 		utterThis.pitch = 1;
 		utterThis.rate = 0.9;
 		synth.speak(utterThis);

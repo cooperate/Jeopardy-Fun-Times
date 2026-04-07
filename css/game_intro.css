@@ -60,6 +60,122 @@ HTML, BODY {
   opacity: 0.92;
 }
 
+/* Host: room code for /home player join flow */
+.host-room-code-panel {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 99995;
+  max-width: min(88vw, 280px);
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-family: 'Zain', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.host-room-code-panel__label {
+  display: block;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  margin-bottom: 4px;
+}
+.host-room-code-panel__code {
+  display: block;
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  font-variant-numeric: tabular-nums;
+  color: #ffea00;
+  margin-bottom: 6px;
+}
+.host-room-code-panel__hint {
+  display: block;
+  font-size: 12px;
+  opacity: 0.8;
+}
+.host-room-code-panel__hint code {
+  background: rgba(255, 255, 255, 0.12);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+/* Host: escape hatch when the room is stuck (e.g. Final Jeopardy after refresh) */
+.host-new-game-btn {
+  position: fixed;
+  top: 132px;
+  left: 14px;
+  z-index: 99996;
+  padding: 8px 14px;
+  margin: 0;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: 'Zain', system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #1a1a1a;
+  background: linear-gradient(180deg, #ffea00, #ffc400);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+.host-new-game-btn:hover {
+  filter: brightness(1.05);
+}
+.host-new-game-btn:focus {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* Host: who has connected (visible on intro before the board loads; updates after refresh) */
+.host-player-roster {
+  position: fixed;
+  top: 188px;
+  left: 14px;
+  z-index: 99996;
+  max-width: min(88vw, 280px);
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-family: 'Zain', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.host-player-roster__label {
+  display: block;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+.host-player-roster__names {
+  display: block;
+  font-weight: 600;
+  word-break: break-word;
+}
+.host-player-roster__names code {
+  background: rgba(255, 255, 255, 0.12);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.92em;
+}
+
 /* Host: AI answer judge in progress */
 .host-ai-judging {
   position: fixed;

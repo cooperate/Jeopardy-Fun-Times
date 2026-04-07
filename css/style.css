@@ -73,19 +73,27 @@ body{
 
 #game_board_container
 {
-	float:left;
-	width:85%;
+	flex: 1 1 auto;
+	min-width: 0;
+	width: 85%;
+	max-width: 85%;
+	box-sizing: border-box;
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch;
 }
 
 #player_board
 {
-	float:left;
+	flex: 0 0 15%;
+	min-width: 0;
 	width: 15%;
+	max-width: 15%;
 	z-index: 11;
 	background: white;
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
+	box-sizing: border-box;
 }
 
 .host-round-timer {
@@ -150,30 +158,96 @@ body{
     height: 100%;
 }
 
-#game_board{
+/* Host board + player clue-picker (#tempGAME): fixed grid so all 6 columns stay in view */
+#game_board,
+#tempGAME > table {
 	height: 100%;
 	width: 100%;
+	max-width: 100%;
 	background: white;
+	table-layout: fixed;
+	border-collapse: collapse;
+	box-sizing: border-box;
 }
 
-#game_board td, #game_board th {
-	width:16%;
+#game_board td,
+#game_board th,
+#tempGAME > table td,
+#tempGAME > table th {
+	width: 16.666%;
+	max-width: 16.666%;
+	box-sizing: border-box;
 	text-align: center;
 	color: #ffea00;
 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0;/*#3f51b5;*/
 	font-family: 'Zain', sans-serif;
 	font-weight: 900;
+	overflow: hidden;
+	word-break: break-word;
+	overflow-wrap: anywhere;
+	hyphens: auto;
+	padding: 2px 4px;
+	vertical-align: middle;
 }
 
-#game_board tr td{
-	font-size:95px;
+#game_board tr td,
+#tempGAME > table tr td {
+	font-size: 95px;
 	text-shadow: 2px 2px black;
 }
 /*linear-gradient(#26A69A, #80CBC4 );*/
 
- #game_board th{
-	color:white;
-	font-size:56px;
+#game_board th,
+#tempGAME > table th {
+	color: white;
+}
+
+/* Fixed-height category row; per-title size set in JS (board_category_headers.js) */
+#game_board tr:first-child,
+#tempGAME > table tr:first-child {
+	height: clamp(72px, 12vh, 200px);
+}
+
+#game_board tr:first-child th,
+#tempGAME > table tr:first-child th {
+	position: relative;
+	color: white;
+	font-size: unset;
+	line-height: 0;
+	word-break: normal;
+	overflow-wrap: normal;
+	hyphens: none;
+}
+
+#game_board tr:first-child th .category-header-text,
+#tempGAME > table tr:first-child th .category-header-text {
+	position: absolute;
+	left: 4px;
+	right: 4px;
+	top: 4px;
+	bottom: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+	box-sizing: border-box;
+}
+
+#game_board tr:first-child th .category-header-text__inner,
+#tempGAME > table tr:first-child th .category-header-text__inner {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	box-sizing: border-box;
+	line-height: 1.08;
+	text-align: center;
+	font-size: 56px;
+	font-weight: 900;
+	font-family: 'Zain', sans-serif;
+	word-break: normal;
+	overflow-wrap: normal;
+	hyphens: none;
+	white-space: normal;
 }
 
 #players_table{
@@ -216,7 +290,13 @@ body{
     left: 0;
     top: 0;
     z-index: 10;
-    display:flex;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 /*the question field*/
@@ -419,6 +499,14 @@ body{
 	font-family: 'Zain', sans-serif;
 	font-weight: 800;
 	text-align:center;
+	box-sizing: border-box;
+}
+
+/* During jQuery Cycle, slides are position:absolute; inner flex must span full slide width so titles stay centered */
+#category_container .category_display .secure_category_container {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
 }
 
 .secure_category_container
@@ -614,11 +702,44 @@ body{
  	background: #2980b9 url(../game-media/images/static_bg.png) repeat 0 0; /*#3f51b5;*/
  	height: 35%;
 	display:flex;
-    align-items: center;
-    justify-content: center;
+	align-items: stretch;
+	justify-content: center;
+	min-height: 0;
+	box-sizing: border-box;
 }
-	
-.player_question h2, #player_score, #player_name{
+
+.player_question_revealed_bounds {
+	flex: 1 1 auto;
+	width: 100%;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+	box-sizing: border-box;
+	padding: 8px 4%;
+}
+
+.player_question #question_revealed {
+	margin: 0;
+	font-family: 'Zain', sans-serif;
+	font-variant: normal;
+	font-weight: 800;
+	color: white;
+	text-align: center;
+	line-height: 1.08;
+	width: 100%;
+	max-width: 100%;
+	box-sizing: border-box;
+	word-break: break-word;
+	overflow-wrap: break-word;
+	hyphens: manual;
+	/* Binary search in board_category_headers.js sets exact size; start large for short titles */
+	font-size: 132px;
+}
+
+#player_score, #player_name{
 	font-family: 'Zain', sans-serif;
 	font-size: 35px;
 	font-variant: normal;
@@ -704,22 +825,15 @@ body{
 /* tablets */
 @media only screen and (max-width: 1024px), only screen and (max-device-width: 1024px) {
 
-	#game_board tr td{
-		font-size:35px;
+	#game_board tr td,
+	#tempGAME tr td {
+		font-size: 35px;
 	}
 
-	#tempGAME tr td{
-		font-size:35px;
-	}
-
-	#tempGAME tr th{
-	color:white;
-	font-size:24px;
-	}
-
-	#game_board tr th{
-	color:white;
-	font-size:24px;
+	#game_board tr th,
+	#tempGAME tr th {
+		color: white;
+		font-size: 24px;
 	}
 
 	#answer_field
@@ -735,10 +849,12 @@ body{
 
 /*phones*/
 @media only screen and (max-width: 767px), only screen and (max-device-width: 767px) {
-   	#game_board tr:not(:first-child) td{
+	#game_board tr:not(:first-child) td,
+	#tempGAME tr:not(:first-child) td {
 		font-size: 25px;
 	}
-	#game_board tr:first-child th{
+	#game_board tr:first-child th,
+	#tempGAME tr:first-child th {
 		font-size: 1em;
 	}
 
@@ -759,17 +875,8 @@ body{
 	{
 		height: 100%;
 	}
-	#question_revealed
-	{
-		font-size: 1em;
-	}
-
 	#bet_field, #bet_button {
 		font-size: 2em;
-	}
-	.player_question h2
-	{
-		font-size:1em;
 	}
 	#player_name, #player_score {
 		font-size: 1em;
@@ -777,11 +884,13 @@ body{
 }
 
 @media only screen and (max-width: 320px), only screen and (max-device-width: 320px) {
-	#game_board tr:first-child th{
+	#game_board tr:first-child th,
+	#tempGAME tr:first-child th {
 		font-size: 0.7em;
 	}
-	#game_board tr:not(:first-child) td{
-		font-size:20px;
+	#game_board tr:not(:first-child) td,
+	#tempGAME tr:not(:first-child) td {
+		font-size: 20px;
 	}
 }
 
