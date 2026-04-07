@@ -1,13 +1,51 @@
 //TODO: buzzing in immediately when question opens causes question timer to go down/question repeat
 //ipads getting blocked out of answering
 
-var express = require('express');
-var app = express();
-var http = require('http').Server(app);
-var io = require('socket.io')(http);
-var fs = require('fs');
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const config = require('./lib/config');
+const { ensureGameHighScoreFile } = require('./lib/ensureDataFiles');
+const { Player, Question } = require('./lib/models');
+const { parseMediaType, parseAnswer } = require('./lib/parsers');
+const { evaluateAnswer } = require('./lib/evaluateAnswer');
+
+ensureGameHighScoreFile(config.paths.gameHighScore);
+
+const app = express();
+const http = require('http').Server(app);
+const io = require('socket.io')(http);
 
 app.use(express.static(__dirname + '/'));
+
+app.get('/', function (req, res) {
+	res.type('html').send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jeopardy — start here</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 2.5rem auto; padding: 0 1.25rem; line-height: 1.55; color: #1a1a1a; }
+    h1 { font-size: 1.35rem; font-weight: 700; }
+    ul { padding-left: 1.1rem; }
+    li { margin: 0.6rem 0; }
+    a { color: #0d47a1; }
+    code { background: #f0f0f0; padding: 0.1rem 0.35rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Jeopardy</h1>
+  <p>Open these URLs in the browser (same machine or same LAN, depending on how you run the server).</p>
+  <ul>
+    <li><strong>Main game board</strong> (TV / host): <a href="/game"><code>/game</code></a></li>
+    <li><strong>Player buzzer</strong> (each contestant): <a href="/player"><code>/player</code></a> — three players join and enter names; the third to join picks decade &amp; timer.</li>
+    <li><strong>Room code entry</strong> (optional): <a href="/home"><code>/home</code></a> — use if your group uses the room-code flow to reach the player page.</li>
+  </ul>
+  <p>Start the server with <code>npm start</code> (or <code>node app.js</code>), then use the links above.</p>
+</body>
+</html>`);
+});
 
 app.get('/home', function(req, res){
   	//res.sendFile(__dirname + '/index.html');
@@ -40,9 +78,9 @@ var questions = new Array();
 var curQuestionId;
 var curActivePlayer; //player who holds the current lead for picking questions
 var file = __dirname + '/data/JEOPARDY_CSV_test.csv';
-var lastNameFile = __dirname + '/data/last_name_stripped.csv';
-var gameHistory = __dirname + '/data/games_played.csv';
-var gameHighScore = __dirname + '/data/game_high_score.csv';
+var lastNameFile = config.paths.lastNameFile;
+var gameHistory = config.paths.gameHistory;
+var gameHighScore = config.paths.gameHighScore;
 var buzzerFlipped = false;
 var buzzedInPlayerName;  //tracks player currently answering questions
 
@@ -65,282 +103,102 @@ var isSecondRound = false;
 var finalJeopardyCheck = false;
 var newGameCounter = 0;
 var gameState = {"active": false};
+var playedClueIds = new Set();
+var playerJoinOrder = [];
 var sqlite3 = require('sqlite3').verbose();
-var db = new sqlite3.Database('./data/clues.db');
-
-class Player
-	{
-		constructor(name)
-		{
-			this._name = name;
-			this._score = 0;
-			this._isActive = false;
-			this._givenAnswer = false;
-			this._finalJeopardyBet = 0;
-		}
-
-		get name()
-		{
-			return this._name;
-		}
-
-		get score()
-		{
-			return this._score;
-		}
-
-		set score(score)
-		{
-			this._score = score;
-		}
-
-		get finalJeopardyBet()
-		{
-			return this._finalJeopardyBet;
-		}
-
-		set finalJeopardyBet(bet)
-		{
-			this._finalJeopardyBet = bet;
-		}
-
-		get active()
-		{
-			return this._isActive;
-		}
-
-		set isActive(active)
-		{
-			this._isActive = active;
-		}
-
-		get givenAnswer()
-		{
-			return this._givenAnswer;
-		}
-
-		set givenAnswer(answerGiven)
-		{
-			this._givenAnswer = answerGiven;
-		}
-	}
-
-class Question
-	{
-		constructor(category, value, question, answer, dailyDouble, questionId, mediaLink, round)
-		{
-			this._category = category;
-			this._value = value;
-			this._question = question;
-			this._answer = answer;
-			this._dailyDouble = dailyDouble;
-			this._questionId = questionId;
-			this._mediaLink = mediaLink;
-			this._mediaType = "none";
-			this._isProperName = false;
-			this._round = round;
-		}
-
-		get round()
-		{
-			return this._round;
-		}
-
-		get category()
-		{
-			return this._category;
-		}
-
-		get question()
-		{
-			return this._question;
-		}
-
-		set question(newQuestion)
-		{
-			this._question = newQuestion;
-		}
-
-		get questionId()
-		{
-			return this._questionId;
-		}
-
-		set questionId(newQuestionId)
-		{
-			this._questionId = newQuestionId;
-		}
-
-		get isProperName()
-		{
-			return this._isProperName;
-		}
-
-		set isProperName(properName){
-			this._isProperName = properName;
-		}
-
-		get answer()
-		{
-			return this._answer;
-		}
-
-		set answer(newAnswer)
-		{
-			this._answer = newAnswer;
-		}
-
-		get mediaLink()
-		{
-			return this._mediaLink;
-		}
-
-		set mediaLink(newLink)
-		{
-			this._mediaLink = newLink;
-		}
-
-		get mediaType()
-		{
-			return this._mediaType;
-		}
-
-		set mediaType(media)
-		{
-			this._mediaType = media;
-		}
-
-		get dailyDouble()
-		{
-			return this._dailyDouble;
-		}
-
-		set dailyDouble(valueDD)
-		{
-			this._dailyDouble = valueDD;
-		}
-
-		get value()
-		{
-			return this._value;
-		}
-
-		set value(value)
-		{
-			this._value = value;
-		}
-	}
-
-
-	function parseMediaType(media)
-	{	
-		var urlLink = media;
-
-		var mediaType = "none";
-
-		if (urlLink)//link exists
-		{
-			// Use a regular expression to trim everything before final dot
-        	var extension = urlLink.replace(/^.*\./, '');
-			var extension = extension.toLowerCase();
-			console.log("EXTENSION TRIM IS " + extension);
-			switch(extension) {
-				case 'jpg': 
-					mediaType = "image";
-					break;
-				case 'jpeg': 
-					mediaType = "image";
-					break;
-				case 'png':
-					mediaType = "image";
-					break;
-				case 'wmv':
-					mediaType = "video_wmv";
-					break;
-				case 'mp4':
-					mediaType = "video_mp4";
-					break;
-				case 'mp3':
-					mediaType = "audio";
-					break;
-				case 'wav':
-					mediaType = "audio";
-					break;
-				case 'aiff':
-					mediaType = "audio";
-					break;
-				default:
-					mediaType = "none";
-			}
-
-		}
-
-		return mediaType;
-	}
-
-	function parseAnswer(answer)
-	{
-		//remove any information in brackets
-		var newAnswer = answer.replace(/ *\([^)]*\) */g, "");
-		newAnswer = newAnswer.toUpperCase();
-
-		var tempActualAnswerSearch = newAnswer.substring(0,1);
-
-		var tempActualAnswerSearchEnd = newAnswer.substring((newAnswer.length - 1), newAnswer.length);
-
-		if (tempActualAnswerSearch == "\"" && tempActualAnswerSearchEnd == "\""){
-			newAnswer = newAnswer.substring(1, (newAnswer.length-1));
-		}
-		
-		tempActualAnswerSearch = newAnswer.substring(0, 2);
-
-		if (tempActualAnswerSearch == "A "){
-			newAnswer = newAnswer.substring(2, newAnswer.length);
-			newAnswer = newAnswer.trim();
-		}
-	
-		tempActualAnswerSearch = newAnswer.substring(0, 3);
-
-		if (tempActualAnswerSearch == "AN ")  //remove the
-		{
-			newAnswer = newAnswer.substring(3, newAnswer.length);
-			newAnswer = newAnswer.trim();
-		}
-
-		if (tempActualAnswerSearch == "THE")  //remove the
-		{
-			newAnswer = newAnswer.substring(3, newAnswer.length);
-			newAnswer = newAnswer.trim();
-		}
-
-		return newAnswer;
-	}
+var db = new sqlite3.Database(config.paths.cluesDb);
 
 
 
 checkForFullGame();
 
+function buildHostSnapshot() {
+	var keys = Object.keys(questions);
+	var questionsPlain = {};
+	for (var i = 0; i < keys.length; i++) {
+		var k = keys[i];
+		var q = questions[k];
+		if (!q) {
+			continue;
+		}
+		questionsPlain[k] = {
+			_category: q._category,
+			_value: q._value,
+			_question: q._question,
+			_answer: q._answer,
+			_dailyDouble: q._dailyDouble,
+			_questionId: q._questionId,
+			_mediaLink: q._mediaLink,
+			_mediaType: q._mediaType,
+			_round: q._round,
+		};
+	}
+	var boardRound = 'Jeopardy';
+	if (isSecondRound || finalJeopardyCheck) {
+		boardRound = 'Double Jeopardy';
+	}
+	var playersList = [];
+	for (var j = 0; j < playerJoinOrder.length; j++) {
+		var pname = playerJoinOrder[j];
+		if (!players[pname]) {
+			continue;
+		}
+		playersList.push({
+			name: pname,
+			score: players[pname].score,
+			isActive: players[pname].active,
+			givenAnswer: players[pname].givenAnswer,
+		});
+	}
+	var ap = getPlayerActive();
+	return {
+		gameActive: gameState.active === true,
+		airdate: AIRDATE,
+		answerTime: ANSWER_TIME,
+		roundTimer: roundTimer,
+		isSecondRound: isSecondRound,
+		finalJeopardyCheck: finalJeopardyCheck,
+		activePlayerName: ap == null ? '' : ap,
+		curQuestionId: curQuestionId == null ? '' : curQuestionId,
+		playedQuestionIds: Array.from(playedClueIds),
+		questions: questionsPlain,
+		players: playersList,
+		questionCount: keys.length,
+		boardRound: boardRound,
+	};
+}
 
 function checkForFullGame(){
 	//TODO COUNT RESULTS FROM DB QUERY
 
 }
 
-/*DOWNLOAD REQUIRED IMAGES*/
-var fs = require('fs'),
-    request = require('request');
-
-var download = function(uri, filename, callback, type){
-	console.log("DOWNLOAD: " + filename);
-	console.log("TYPE: " + type);
-	console.log("URI: " + uri);
-  request.head(uri, function(err, res, body){
-    console.log('content-type:', res.headers['content-type']);
-    console.log('content-length:', res.headers['content-length']);
-
-    request(uri).pipe(fs.createWriteStream('./temp-media/' + type + '/' + filename)).on('close', callback);
-  });
-};
+/*DOWNLOAD REQUIRED IMAGES (native fetch; no request package)*/
+function download(uri, filename, callback, type) {
+	var destDir = path.join(__dirname, 'temp-media', type);
+	console.log('DOWNLOAD: ' + filename);
+	console.log('TYPE: ' + type);
+	console.log('URI: ' + uri);
+	fs.mkdirSync(destDir, { recursive: true });
+	var destPath = path.join(destDir, filename);
+	fetch(uri)
+		.then(function (res) {
+			if (!res.ok) {
+				throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+			}
+			console.log('content-type:', res.headers.get('content-type'));
+			console.log('content-length:', res.headers.get('content-length'));
+			return res.arrayBuffer();
+		})
+		.then(function (buf) {
+			fs.writeFileSync(destPath, Buffer.from(buf));
+			callback();
+		})
+		.catch(function (err) {
+			console.error('DOWNLOAD failed:', uri, err.message || err);
+			callback();
+		});
+}
 
 var curRoomCodes = new Array();
 
@@ -360,7 +218,8 @@ playerSelect.on('connection', function(socket){
 		if(curRoomCodes.indexOf(_roomCode) != -1){
 			socket.emit('room code validated', true);
 			socket.join(_roomCode);
-			socket.emit('send to room', "http://localhost:3000/player");
+			var base = config.publicBaseUrl || ('http://localhost:' + config.port);
+			socket.emit('send to room', base + '/player');
 		}
 		else{
 			socket.emit('room code validated', false);	
@@ -372,6 +231,12 @@ playerSelect.on('connection', function(socket){
 });
 
 gameSpc.on('connection', function(socket){
+  try {
+  	socket.emit('host state snapshot', buildHostSnapshot());
+  } catch (err) {
+  	console.error('buildHostSnapshot failed', err);
+  	socket.emit('host state snapshot', { gameActive: false });
+  }
 
   //buzzers on/off
   socket.on('open buzzer', function () {
@@ -499,6 +364,8 @@ gameSpc.on('connection', function(socket){
    //TIMERS
 
    socket.on('begin round timer', function(){
+   		stopTimer(roundTimerObject);
+   		roundTimerObject = null;
    		roundTimer = ROUND_TIME;
    		setRoundTimer();
    });
@@ -563,6 +430,7 @@ gameSpc.on('connection', function(socket){
 	  	gameData = [];
 	  	questions.length = 0;
 	  	questions = [];
+	  	playedClueIds.clear();
 	  	finalJeopardyCheck = false;
 	  	isSecondRound = false;
 	  	roundTimer = ROUND_TIME;
@@ -601,6 +469,9 @@ playerSpc.on('connection', function(socket){
 	  	currentConnections[socket.id].username = name;
 	  	console.log("CONNECTION USER DATA " + currentConnections);
 		gameSpc.emit('login name', name);
+		if (playerJoinOrder.indexOf(name) === -1) {
+			playerJoinOrder.push(name);
+		}
 		players[name] = new Player(name);
 		console.log(players);
 		if (objectLength(players)== 3)
@@ -677,6 +548,7 @@ playerSpc.on('connection', function(socket){
   		questionTimer = null;
 		allPlayersNoAnswer();
 		curQuestionId  = questionId;
+		playedClueIds.add(questionId);
 		console.log("Question:" + JSON.stringify(questions[questionId]));
 		gameSpc.emit('question reveal', {question: questions[questionId]._question, questionId: questionId, playerName: getPlayerActive()});
 		playerSpc.emit('question reveal', {question: questions[questionId]._question, dailyDouble: questions[questionId]._dailyDouble, questionId: questionId, playerName: getPlayerActive()});
@@ -731,14 +603,14 @@ playerSpc.on('connection', function(socket){
   socket.on('answer selection', function (answer) {
 	buzzerFlipped = false;
 	if (answer.finalJeopardyCheck){
-		checkAnswer(answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
+		checkAnswerAsync(answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
 	}
 	else if (buzzedInTimerCount > 0){
 		stopTimer(buzzedInTimer);
 		stopTimer(dailyDoubleTimer);
 		buzzedInTimer = null;
 		dailyDoubleTimer = null;
-		checkAnswer(answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
+		checkAnswerAsync(answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
   	}
   });
 
@@ -776,359 +648,91 @@ playerSpc.on('connection', function(socket){
    	console.log("DISCONNECTED USERNAME DATA " + disconnectedUserNames);
   });
 
-  	function checkAnswer(answer, questionId, playerName, finalJeopardy)
-	{
-		if (finalJeopardy)
-		{
-			questionId = "FJ_0_0";
+	function checkAnswerAsync(answer, questionId, playerName, finalJeopardy) {
+		if (finalJeopardy) {
+			questionId = 'FJ_0_0';
 		}
 
-		console.log("question ID: " + questionId);
-		console.log("answer" + answer);
 		var originalPlayerAnswer = answer.toUpperCase();
-		var originalActualAnswer = questions[questionId]._answer.toUpperCase(); 
-		var actualAnswer = questions[questionId]._answer;
-		var playerAnswer = answer;
+		var originalActualAnswer = questions[questionId]._answer.toUpperCase();
 		var score = players[playerName].score;
-		var value = questions[questionId]._value;
+		var value = parseInt(questions[questionId]._value, 10);
 		var correct = false;
-		var skimmedAnswer = false;
-		var andAnswer = false;
-		value = parseInt(value, 10);
 
-		actualAnswer = actualAnswer.toUpperCase();
-		playerAnswer = playerAnswer.toUpperCase();
+		evaluateAnswer({
+			playerAnswer: answer,
+			canonicalAnswer: questions[questionId]._answer,
+			clueText: questions[questionId]._question,
+			lastNameFilePath: lastNameFile,
+			aiEnabled: config.openaiAnswerJudgeEnabled,
+			openaiApiKey: config.openaiApiKey,
+			openaiModel: config.openaiModel,
+		})
+			.then(function (result) {
+				correct = result.correct;
+				if (result.source === 'openai') {
+					console.log(
+						'Answer judged by OpenAI: ' +
+							(correct ? 'correct' : 'incorrect') +
+							(result.aiReason ? ' — ' + result.aiReason : '')
+					);
+				}
 
-		console.log("ACTUAL ANSWER BEFORE MODIFICATION: " + actualAnswer);
-		console.log("PLAYER ANSWER BEFORE MODIFICATION: "+ playerAnswer);
+				if (finalJeopardy) {
+					value = 0;
+				}
 
+				if (correct) {
+					score += value;
+					setPlayerActive(players[playerName]);
+				} else {
+					score -= value;
+				}
 
-		tempActualAnswerSearch = actualAnswer.substring(0, 2);
-
-		if (tempActualAnswerSearch == "A "){
-			actualAnswer = actualAnswer.substring(2, actualAnswer.length);
-			actualAnswer.trim();
-		}
-
-		tempINGAnswerSearch = actualAnswer.substring(actualAnswer.length-4);
-		tempINGPlayerAnswerSearch = actualAnswer.substring(actualAnswer.length-4);
-
-		if(tempINGAnswerSearch == "ING"){
-			actualAnswer = actualAnswer.substring(0, actualAnswer.length-4);
-		}
-		if(tempINGPlayerAnswerSearch == "ING"){
-			playerAnswer = playerAnswer.substring(0, playerAnswer.length-4);
-		}
-		
-		//remove what is, who is, who are, the
-		var regexCommon = new RegExp("^\\b(WHAT IS|WHO IS|WHO ARE|WHAT ARE|WHAT IS|WHO IS A|WHO ARE A|WHAT ARE A|WHAT IS A|LIKE A| LIKE)\\b", "g"); 
-		playerAnswer = playerAnswer.replace(regexCommon,'');
-
-		//change all instances of & to AND
-		if(actualAnswer.includes("&") || actualAnswer.includes("AND"))
-		{
-			//andAnswer = true;
-			actualAnswer = actualAnswer.replace("&", "AND");
-		}
-		if(playerAnswer.includes("&"))
-		{
-			playerAnswer = playerAnswer.replace("&", "AND");
-		}
-
-
-		console.log("actualAnswer before remove special characters" + actualAnswer);
-		console.log("playerAnswer before remove special characters" + playerAnswer);
-
-		actualAnswer = removeSpecialCharacters(actualAnswer);
-		playerAnswer = removeSpecialCharacters(playerAnswer);
-
-		actualAnswer = actualAnswer.trim();
-		playerAnswer = playerAnswer.trim();
-
-		console.log("actualAnswer after remove special characters" + actualAnswer);
-		console.log("playerAnswer after remove special characters" + playerAnswer);
-		
-		//check if answer is proper name
-		var isName = false;
-		
-		console.log("Player Answer before name check: " + playerAnswer);
-		var playerAnswerArrayTemp = playerAnswer.split(" ");
-		console.log(playerAnswerArrayTemp.length);
-		
-		tempPlayerAnswerSearch = playerAnswer.substring(0, 3);
-
-			//make sure the string isn't inside the answer or a "bad" word
-			var badWords = new Array(
-				"THE",
-				"THEN",
-				"ST",
-				"ST.",
-				"IS",
-				"WHAT ",
-				"A",
-				"WHO",
-				"WHERE",
-				"WHEN",
-				"AFTER",
-				"IN",
-				"TO",
-				"AS",
-				"WHY",
-				"AN",
-				"ON",
-				"WITH",
-				"AND");
-
-		actualAnswer = actualAnswer.split(" ");
-		playerAnswer = playerAnswer.split(" ");
-		console.log("player Array length: " + playerAnswer.length);
-		console.log("answer Array length: " + actualAnswer.length);
-		
-		if (playerAnswer.length == 1){
-			playerAnswer = equateNumberLiterals(playerAnswer);
-		}
-
-		if (actualAnswer.length == 1){
-			actualAnswer = equateNumberLiterals(actualAnswer);
-		}
-		/*if (actualAnswer.includes(playerAnswer)) //check if answer includes the players response
-		{
-
-			if (badWords.indexOf(playerAnswer) === -1) //check if the answer was something silly from the array above 
-			{
-				var stringToGoIntoTheRegex = playerAnswer;
-				var regex = new RegExp("\\b" + stringToGoIntoTheRegex + "\\b", "g"); ///\bsdda\b/g //check if the answer has any part inside the word
-				// at this point, the line above is the same as: var regex = /#abc#/g;
-
-				var searchResult = actualAnswer.search(regex);
-
-				console.log("String: " + regex);
-				console.log("Reg ex: " + searchResult);
-
-				if(searchResult != -1)
-				{
-					if(closeEnough(playerAnswer, actualAnswer))
-					{
-						skimmedAnswer = true;
+				if (finalJeopardy) {
+					if (correct) {
+						score += parseInt(final_jeopardy_bet[playerName].bet, 10);
+					} else {
+						score -= parseInt(final_jeopardy_bet[playerName].bet, 10);
 					}
 				}
-			}
-		}*/
 
-		var answerObject = checkForPlural(playerAnswer, actualAnswer);
+				players[playerName].score = score;
 
-		actualAnswer = answerObject.actualAnswer;
-
-		playerAnswer = answerObject.playerAnswer;
-
-		console.log("player answer after plural check: " + playerAnswer);
-		
-
-		console.log("player Array length: " + playerAnswer.length);
-		console.log("answer Array length: " + actualAnswer.length);
-
-		//remove all "spaces" from array
-		for (var word in actualAnswer){
-			if(actualAnswer[word] == " "){
-				actualAnswer.splice(word, 1);
-			}
-		}
-		for (var word in playerAnswer){
-			console.log("WORD VAR: " + word);
-			console.log("ANSWER INDEX: " + playerAnswer[word]);
-			if(playerAnswer[word] == " "){
-				playerAnswer.splice(word, 1);
-			}
-		}
-
-		console.log("player Array length: " + playerAnswer.length);
-		console.log("answer Array length: " + actualAnswer.length);
-
-		var actualAnswer = actualAnswer.filter(function(x) { 
-  			return badWords.indexOf(x) < 0;
-		});
-
-		var playerAnswer = playerAnswer.filter(function(x) { 
-  			return badWords.indexOf(x) < 0;
-		}); 
-
-		console.log("removed bad words from answer : " + actualAnswer + "\n removed bad words from player answer: " + playerAnswer);
-		
-		if (actualAnswer.length <= 3){
-			console.log("THIS MIGHT BE A PROPER NAME");
-			if(actualAnswer.length==3){
-				isName = checkIfName(actualAnswer[2]);
-			}else if(actualAnswer.length==2){
-				isName = checkIfName(actualAnswer[1]);
-			}else if(actualAnswer.length==1){
-				isName = checkIfName(actualAnswer[0]);
-			}
-		}
-
-		if (isName){
-			if(playerAnswer.length == 1){
-				if(actualAnswer.length==1){
-					if(playerAnswer[0] == actualAnswer[0]){
-						skimmedAnswer = true;
-					}	
-				}else if(actualAnswer.length==2){
-					if(playerAnswer[0] == actualAnswer[1]){
-						skimmedAnswer = true;
-					}	
+				if (!finalJeopardy) {
+					gameSpc.emit('score update', {
+						score: players[playerName].score,
+						answer: originalPlayerAnswer,
+						playerName: playerName,
+						actualAnswer: originalActualAnswer,
+						dailyDouble: questions[questionId]._dailyDouble,
+						dailyDoubleBet: questions[questionId]._value,
+						questionId: questionId,
+						correct: correct,
+						allPlayersAnswered: checkIfAllPlayersAnswered(),
+					});
+					playerSpc.emit('score update', {
+						score: players[playerName].score,
+						playerName: playerName,
+						questionId: questionId,
+						correct: correct,
+						dailyDouble: questions[questionId]._dailyDouble,
+						dailyDoubleBet: questions[questionId]._value,
+						allPlayersAnswered: checkIfAllPlayersAnswered(),
+					});
+				} else {
+					gameSpc.emit('score update final jeopardy', {
+						score: score,
+						answer: originalPlayerAnswer,
+						playerName: playerName,
+						correct: correct,
+						buzzedInFJ: true,
+					});
 				}
-			}else if(playerAnswer.length == 2){
-				if(actualAnswer.length==1){
-					if(playerAnswer[1] == actualAnswer[0]){
-						skimmedAnswer = true;
-					}	
-				}else if(actualAnswer.length==2){
-					if(playerAnswer[1] == actualAnswer[1]){
-						skimmedAnswer = true;
-					}	
-				}
-			}else if(playerAnswer.length == 3){
-				if(actualAnswer.length==1){
-					if(playerAnswer[1] == actualAnswer[0]){
-						skimmedAnswer = true;
-					}	
-				}else if(actualAnswer.length==2){
-					if(playerAnswer[1] == actualAnswer[1]){
-						skimmedAnswer = true;
-					}	
-				}else if(actualAnswer.length==3){
-					if(playerAnswer[2] == actualAnswer[2]){
-						skimmedAnswer = true;
-					}	
-				}
-			}	
-		}
-
-		//search to see if any meaningful words match from the actual answer and the players answer, excluding a set of "bad" words (pronouns, conjugates etc.)
-		var answerCount = 0;
-		if(!isName){
-			for (var word in actualAnswer){
-				for(var wordY in playerAnswer){
-					console.log("PLAYER ANSWER CHECK: " + playerAnswer[wordY] + "ACTUAL ANSWER CHECK: "+ actualAnswer[word]);
-					if(playerAnswer[wordY] == actualAnswer[word]){
-						console.log("WORD THAT WAS CONFIRMED CORRECT: " + actualAnswer[word]);
-						//if (!andAnswer){
-							//skimmedAnswer = true;
-							//break;
-						//}
-						//else
-						//{
-							answerCount++;
-						//}
-					}
-				}
-			}
-		}
-
-		if (answerCount >= 2 && actualAnswer.length>2){ 
-			skimmedAnswer = true;
-		}
-		if (answerCount>=1 && actualAnswer.length==2){
-			skimmedAnswer = true;
-		}
-		if(answerCount==1  && actualAnswer.length==1){
-			skimmedAnswer = true;
-		}
-		console.log("player answer length: " + playerAnswer.length + " actual answer length: " + actualAnswer.length);
-		console.log("actual answer plus 1: " + (actualAnswer.length + 1));
-		if(playerAnswer.length > (actualAnswer.length + 1)){
-			skimmedAnswer = false;
-		}
-
-		/*if(checkForPlural(playerAnswer, actualAnswer))
-		{
-
-			if (badWords.indexOf(playerAnswer) === -1) //check if the answer was something silly from the array above 
-			{
-
-				if (actualAnswer.slice(-1) == "S"){
-					actualAnswer = actualAnswer.substring(0, actualAnswer.length - 1);
-				}
-
-				if(playerAnswer.slice(-1) == "S"){
-					playerAnswer = playerAnswer.substring(0, playerAnswer.length - 1);
-				}
-
-				if (actualAnswer.includes(playerAnswer)) //check if answer includes the players response
-				{
-					var stringToGoIntoTheRegex = playerAnswer;
-					var regex = new RegExp("\\b" + stringToGoIntoTheRegex + "\\b", "g"); ///\bsdda\b/g //check if the answer has any part inside the word
-					// at this point, the line above is the same as: var regex = /#abc#/g;
-
-					var searchResult = actualAnswer.search(regex);
-
-					console.log("String: " + regex);
-					console.log("Reg ex: " + searchResult);
-
-					if(searchResult != -1)
-					{
-						if(closeEnough(playerAnswer, actualAnswer))
-						{
-							skimmedAnswer = true;
-						}
-					}
-				}
-			}
-		}*/
-
-		console.log("PLAYER ANSWER COMPARE: " + playerAnswer + " \n ACTUAL ANSWER COMPARE: " + actualAnswer);
-
-		var exactEqual = actualAnswer === playerAnswer;
-
-		if (finalJeopardy)
-		{
-			value = 0;
-		}
-
-		//Absolute Correct Answer variable responses "GREAT" "AWESOME" "CORRECT!"
-		if (exactEqual || skimmedAnswer)
-		{
-			 score += value;
-			 correct = true;
-			 setPlayerActive(players[playerName]);
-		}
-
-		//Somewhat Close variable responses "WE'LL TAKE IT!"  "LOOKS LIKE YOUR RIGHT."
-
-		//Incorrect
-		else
-		{
-			score -= value;
-			correct = false;
-		}
-
-		if (finalJeopardy)
-		{
-			console.log(final_jeopardy_bet[playerName].bet);
-			console.log("correct" + correct);
-			if (correct)
-			{
-				score += parseInt(final_jeopardy_bet[playerName].bet);
-			}
-			else
-			{
-				score -= parseInt(final_jeopardy_bet[playerName].bet);
-			}
-		}
-
-		players[playerName].score = score;
-
-		console.log("is it final jeopardy: "+ finalJeopardy);
-		console.log("player Answer: " + playerAnswer);
-		if (!finalJeopardy)
-		{
-			gameSpc.emit('score update', {score: players[playerName].score, answer: originalPlayerAnswer, playerName: playerName, actualAnswer: originalActualAnswer, dailyDouble: questions[questionId]._dailyDouble, dailyDoubleBet: questions[questionId]._value, questionId: questionId, correct: correct, allPlayersAnswered: checkIfAllPlayersAnswered()});
-			playerSpc.emit('score update', {score: players[playerName].score, playerName: playerName, questionId: questionId, correct: correct, dailyDouble: questions[questionId]._dailyDouble, dailyDoubleBet: questions[questionId]._value, allPlayersAnswered: checkIfAllPlayersAnswered()});
-		}
-		else
-		{
-			console.log("sending data: score "+ score + "answer " + playerAnswer + "name " + playerName + "correct " + correct);
-			gameSpc.emit('score update final jeopardy', {score: score, answer: originalPlayerAnswer, playerName: playerName, correct: correct, buzzedInFJ: true});
-		}	
+			})
+			.catch(function (err) {
+				console.error('evaluateAnswer failed', err);
+			});
 	}
 });
 
@@ -1313,120 +917,6 @@ function loadGame(name, socket, players){
 	socket.emit('update-state-reload', gameState);
 }	
 
-function checkIfName(playerNameToCheck){
-
-	var lastNameSend = fs.readFileSync(lastNameFile, {
-  		encoding: 'binary'
-	});
-	// pass in the contents of a csv file
-	var parsedLastName = Baby.parse(lastNameSend);
-
-	// voila
-	var rowsLastName = parsedLastName.data;
-
-	console.log("checking name");
-	//if (rowsLastName.indexOf(playerNameToCheck) != -1){
-	for(var row in rowsLastName){
-		if (playerNameToCheck == rowsLastName[row][0]){
-			console.log("This last name exists in our database.");
-			return true;
-		}
-	}
-
-	return false;
-}
-
-function equateNumberLiterals(number){
-	switch(number[0]){
-		case "1":
-			number[0] = "ONE";
-			break;
-		case "2":
-			number[0] = "TWO";
-			break;
-		case "3":
-			number[0] = "THREE";
-			break;
-		case "4":
-			number[0] = "FOUR";
-			break;
-		case "5":
-			number[0] = "FIVE";
-			break;
-		case "6":
-			number[0] = "SIX";
-			break;
-		case "7":
-			number[0] = "SEVEN";
-			break;
-		case "8":
-			number[0] = "EIGHT";
-			break;
-		case "9":
-			number[0] = "NINE";
-			break;
-		case "10":
-			number[0] = "TEN";
-			break;
-		default:
-			break;
-	}
-
-	return number;
-}	
-
-function removeSpecialCharacters(word){
-
-	var newWord = word;
-	var specialCharacters = [
-		"-",
-		":",
-		",",
-		 ".",
-		 ";",
-		 "!",
-		 "[",
-		 "]",
-		 "(",
-		 ")",
-		 "\\",
-		 "/",
-		 "$",
-		 "%",
-		 "&",
-		 "+",
-		 "-",
-		 "{",
-		 "}",
-		 "'",
-		 "`",
-		 "_",
-		 "|"
-	];
-
-	var specialCharacter;
-	for (specialCharacter in specialCharacters)
-	{
-		var re = new RegExp("[\\" + specialCharacters[specialCharacter] + "]","gi");
-		if (newWord.includes(specialCharacters[specialCharacter]))
-		{
-			if(specialCharacters[specialCharacter] == "'"){
-				newWord = newWord.replace(re, '');
-			}
-			else{
-				newWord = newWord.replace(re, ' ');
-			}
-		}
-	}
-
-	return newWord;
-}
-
-http.listen(3000, function(){
-  console.log('listening on *:3000');
-});
-
-
 function objectLength( object ) {
     var length = 0;
     for( var key in object ) {
@@ -1436,69 +926,6 @@ function objectLength( object ) {
     }
     return length;
 };
-
-function checkForPlural(playerAnswer, actualAnswer){
-	console.log(playerAnswer.length);
-	console.log(actualAnswer.length);
-	var answerObject = {playerAnswer: playerAnswer,
-                    actualAnswer: actualAnswer};
-	console.log(answerObject.playerAnswer.length);
-	console.log(answerObject.actualAnswer.length);
-    
-	for (var answerWord in actualAnswer){
-	    if (actualAnswer[answerWord].slice(-1) == "S")
-	    {
-	            answerObject.actualAnswer[answerWord] = actualAnswer[answerWord].substring(0, actualAnswer[answerWord].length - 1);
-	    }
-	}
-	for (var answerWord in playerAnswer){
-	    if (playerAnswer[answerWord].slice(-1) == "S")
-	    {
-	            answerObject.playerAnswer[answerWord] = playerAnswer[answerWord].substring(0, playerAnswer[answerWord].length - 1);
-	    }
-	}
-
-	console.log("ANSWER OBJECT: " + JSON.stringify(answerObject));
-	console.log(answerObject.playerAnswer.length);
-	console.log(answerObject.actualAnswer.length);
-	return answerObject;
-}
-
-//check if the answer contains enough of the actual response
-function closeEnough(playerAnswer, actualAnswer){
-	var actualAnswerLength = actualAnswer.split(' ').length;
-	var actualAnswerArray = actualAnswer.split(' ');
-	var playerAnswerArray = playerAnswer.split(' ');
-	var answerArray = new Array(actualAnswerArray,
-		playerAnswerArray);
-
-	var result = answerArray.shift().filter(function(v) {
-		    return answerArray.every(function(a) {
-		        return a.indexOf(v) !== -1;
-		    });
-	});
-
-	console.log("CLOSE ENOUGH RESULT: " + JSON.stringify(result));
-
-	if (actualAnswerLength.length <= 2){
-		if (result.length > 1 && result.length <= 3){
-			return result;
-		}
-		else{
-			return false;
-		}
-	}
-	else{
-		if(result.length>=actualAnswerLength.length - 1){
-			return result;
-
-		}
-		else{
-			return false;
-		}
-	}
-
-}
 
 function changeActivePlayerNewRound(){
 	var lowestScore = 999999;
@@ -1639,16 +1066,25 @@ function selectByDecade(decade, callback){
 		historyArray.push(rowsHistory[rowY][0]);
 	}
 
+	var playedGameIds = historyArray.filter(function (id) {
+		return id != null && id !== '' && id !== 'undefined';
+	});
+	var notInClause = '';
+	if (playedGameIds.length > 0) {
+		notInClause =
+			' AND clues.game NOT IN ' + iterateThroughArraySQLite(playedGameIds);
+	}
+
 	db.serialize(function() {
 
 		var queryThisGameId ="SELECT clues.game, airdate\n" +
 			"FROM clues\n" +
 			"JOIN airdates ON clues.game = airdates.game\n" +
-			"WHERE clues.game NOT IN " + iterateThroughArraySQLite(historyArray) + "\n" +
-			"AND airdate LIKE '" + useDecade + "%'\n" +
+			"WHERE airdate LIKE '" + useDecade + "%'\n" +
+			notInClause + "\n" +
 			"GROUP BY clues.game\n" +
 			"HAVING count(id) == 61\n" +
-			"ORDER BY RANDOM() LIMIT 1"; 
+			"ORDER BY RANDOM() LIMIT 1";
 
 			console.log(queryThisGameId);
 
@@ -1656,6 +1092,10 @@ function selectByDecade(decade, callback){
     		if(err){
 		        console.log(err);
 		    }else{
+		    	if (!rows || !rows[0]) {
+		    		console.error('selectByDecade: no game row returned');
+		    		return;
+		    	}
 		        callback(rows[0]);
 		        console.log("THIS GAME ID: " + rows[0].game);
 		    }
@@ -1664,14 +1104,13 @@ function selectByDecade(decade, callback){
 }
 
 function iterateThroughArraySQLite(arrayIterate){
-	var sqliteFormatArray = "(";
-	for (var arrayIndex in arrayIterate){
-		sqliteFormatArray += "'" + arrayIterate[arrayIndex] + "', ";
+	var parts = [];
+	for (var arrayIndex = 0; arrayIndex < arrayIterate.length; arrayIndex++){
+		var id = arrayIterate[arrayIndex];
+		if (id == null || id === '') continue;
+		parts.push("'" + String(id).replace(/'/g, "''") + "'");
 	}
-	sqliteFormatArray = sqliteFormatArray.substring(0, sqliteFormatArray.length - 3); // chop off last two characters
-	sqliteFormatArray += "' )";
-
-	return sqliteFormatArray;
+	return '(' + parts.join(', ') + ')';
 }
 
 function stopTimer(timer){
@@ -1745,24 +1184,30 @@ function buzzedInBeginCountdown()
 
 	function setRoundTimer()
 	{
-		roundTimerObject = setInterval(function() {
-			if (roundTimer==ROUND_TIME){
-				gameSpc.emit('update round interval', {roundTimer: roundTimer, round: isSecondRound, activePlayerName: getPlayerActive()});
-				playerSpc.emit('update round interval', roundTimer);
-			}
-			
-			if (roundTimer == 0) {
+		roundTimerObject = setInterval(function () {
+			gameSpc.emit('update round interval', {
+				roundTimer: roundTimer,
+				round: isSecondRound,
+				activePlayerName: getPlayerActive(),
+			});
+			playerSpc.emit('update round interval', roundTimer);
+
+			if (roundTimer === 0) {
 				playerSpc.emit('close category select');
 				stopTimer(roundTimerObject);
-				gameSpc.emit('update round interval', {roundTimer: roundTimer, round: isSecondRound, activePlayerName: getPlayerActive()});
-				playerSpc.emit('update round interval', roundTimer);
-				if (isSecondRound && roundTimer<=0){
+				roundTimerObject = null;
+				if (isSecondRound && roundTimer <= 0) {
 					finalJeopardyCheck = true;
 				}
-				if (!isSecondRound){
+				if (!isSecondRound) {
 					isSecondRound = true;
 				}
+				return;
 			}
 			roundTimer--;
 		}, 1000);
 	}
+
+http.listen(config.port, function () {
+	console.log('listening on *:' + config.port);
+});

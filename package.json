@@ -3,12 +3,17 @@
   "version": "0.0.1",
   "description": "Jeopardy Game with socket.io, inspired by 'Jackbox Party Pack'",
   "dependencies": {
-    "express": "^4.14.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "papaparse": "^5.4.1",
     "socket.io": "^1.7.3",
-	"sqlite3": "^3.1.13",
-    "sweetalert": "^2.0.3",
-    "sweetalert2": "^6.9.1",
-    "papaparse": "^4.3.6",
-    "request": "^2.82.0"
+    "sqlite3": "^5.1.7",
+    "sweetalert2": "^6.11.5"
+  },
+  "scripts": {
+    "start": "node app.js"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

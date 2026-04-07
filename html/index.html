@@ -9,12 +9,16 @@
     <link rel="stylesheet" type="text/css" href="../css/game_intro.css" >
   </head>
   <body>
+   <button type="button" id="host_sound_toggle" class="host-sound-toggle" aria-live="polite" title="Sound: click to enable (browsers block audio until you interact)">🔇</button>
    <div id="master_container">
       <div id="game_container">
         <div id="game_board_container">
         </div>
         <div id="player_board">
-          
+          <div id="host_round_timer" class="host-round-timer" aria-live="polite">
+            <div id="host_round_timer_label" class="host-round-timer__label">JEOPARDY</div>
+            <div id="host_round_timer_value" class="host-round-timer__value">10:00</div>
+          </div>
           <table id="players_table">
 
           </table>
@@ -75,8 +79,7 @@
     </div>
     <div id="game_intro">
       <div id="intro_h2_container">
-        <h2 id="this_is_jeopardy">THIS IS JEOPARDY!<h2>
-      </h2>
+        <h2 id="this_is_jeopardy">THIS IS JEOPARDY!</h2>
       </div>
       <div class = "player_name_bubbles">
         <div class = "player_name_bubble" id="player_name_bubble_1"></div>
@@ -84,7 +87,6 @@
         <div class = "player_name_bubble" id="player_name_bubble_3"></div>
       </div>
     </div>
-  </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.7.3/socket.io.js"></script>
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
     <script src="../javascript/libraries/jquery-ui.min.js"></script>
