@@ -196,6 +196,36 @@ $(document).ready(function() {
 
 	var socket = io('/game');
 
+	function showHostAiJudging(playerName) {
+		var wrap = $('#host_ai_judging');
+		if (!wrap.length) {
+			return;
+		}
+		if (playerName) {
+			$('#host_ai_judging_player').text(playerName);
+		} else {
+			$('#host_ai_judging_player').text('');
+		}
+		wrap.removeClass('host-ai-judging--hidden').attr('aria-hidden', 'false');
+	}
+
+	function hideHostAiJudging() {
+		var wrap = $('#host_ai_judging');
+		if (!wrap.length) {
+			return;
+		}
+		wrap.addClass('host-ai-judging--hidden').attr('aria-hidden', 'true');
+		$('#host_ai_judging_player').text('');
+	}
+
+	socket.on('answer ai judging', function (data) {
+		showHostAiJudging(data && data.playerName);
+	});
+
+	socket.on('answer ai judging end', function () {
+		hideHostAiJudging();
+	});
+
 	socket.on('game data', function (data) {
 		if (skipGameDataAfterHostRestore) {
 			return;
@@ -1047,6 +1077,7 @@ $(document).ready(function() {
 
 	 //on answer determination answer submit
 	 socket.on('score update', function(score){
+	 	hideHostAiJudging();
 	 	var openQuestionsSwitch = true;
 	 	$('#name_' + nameIds[score.playerName]).html(score.score);
 	 	//stopSound(clockCountdown);
@@ -1191,6 +1222,7 @@ $(document).ready(function() {
 
 	 var countScores = 0;
 	 socket.on('score update final jeopardy', function(scoreFJ){
+	 		hideHostAiJudging();
 	 		console.log("score update score: " + scoreFJ.score + " player name: " + scoreFJ.playerName);
 	 		if (!finalJeopardyThemeEnded){
 		 		if (scoreFJ.buzzedInFJ)
