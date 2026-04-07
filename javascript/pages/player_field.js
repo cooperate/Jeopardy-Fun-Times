@@ -12,7 +12,29 @@ $(document).ready(function() {
 	var playerScore = 0;
 	var activePlayerName;
 	var curQuestionId = '';
-	var socket = io('/player');
+
+	function normalizePlayerRoomCode(s) {
+		return String(s || '')
+			.trim()
+			.toUpperCase()
+			.replace(/[^A-Z0-9]/g, '');
+	}
+
+	var playerRoomCode = normalizePlayerRoomCode(
+		new URLSearchParams(window.location.search).get('room')
+	);
+	if (!playerRoomCode) {
+		window.location.replace('/home');
+		return;
+	}
+
+	var socket = io('/player', { query: { room: playerRoomCode } });
+
+	socket.on('player room error', function (payload) {
+		var msg = payload && payload.message ? payload.message : 'Room not found.';
+		window.alert(msg);
+		window.location.replace('/home');
+	});
 	var buzzerLock=false;
 	var finalJeopardyCheck = false;
 	var clicked = false;
@@ -25,6 +47,55 @@ $(document).ready(function() {
 	var answerTime = 15;
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR =  "../../game-media/images/";
+	var PLAYER_NAME_STORAGE_KEY = 'jeopardy.playerName';
+	var autoLoginFromStorageDone = false;
+
+	function readStoredPlayerName() {
+		try {
+			var raw = localStorage.getItem(PLAYER_NAME_STORAGE_KEY);
+			if (!raw || !raw.trim()) {
+				return '';
+			}
+			return raw.trim().toUpperCase();
+		} catch (e) {
+			return '';
+		}
+	}
+
+	function persistPlayerName(name) {
+		try {
+			if (name) {
+				localStorage.setItem(PLAYER_NAME_STORAGE_KEY, name);
+			}
+		} catch (e) { /* private mode / quota */ }
+	}
+
+	function beginPlayerJoin(loginNameStripped) {
+		playerName = loginNameStripped;
+		persistPlayerName(playerName);
+		if (!$('#player_name').length) {
+			$('.player_field_info').append("<h2 id='player_name'>" + playerName + "</h2>");
+			$('.player_field_info').append("<h2 id='player_score'>0</h2>");
+		} else {
+			$('#player_name').text(playerName);
+			$('#player_score').html('0');
+		}
+	}
+
+	function attemptAutoLoginFromStorage() {
+		if (autoLoginFromStorageDone || playerName) {
+			return;
+		}
+		var saved = readStoredPlayerName();
+		if (!saved) {
+			return;
+		}
+		autoLoginFromStorageDone = true;
+		$('#login_name').val(saved);
+		$('#join_btn').prop('disabled', true);
+		beginPlayerJoin(saved);
+		socket.emit('login name', saved);
+	}
 
 	var speechRecognition = null;
 
@@ -61,18 +132,204 @@ $(document).ready(function() {
 		}
 	}
 
-	socket.on('update-state-reload', function(gameState){
-		console.log(gameState);
-		if(playerName == null){
-			playerName = gameState['player-name'];
-			playerScore = gameState['players'];
-			activePlayerName = gameState['active-player-name'];
-			finalJeopardyCheck = gameState['final-jeopardy-check'];
-			$("#login_container").css('display', 'none');
-			$(".player_field").css('display', 'block');
+	function ensurePlayerBoardMarkup(markup) {
+		if (!markup || !String(markup).trim()) {
+			return;
+		}
+		if (!$('#tempGAME').length) {
+			$('.player_field').append("<div id='tempGAME'>" + markup + "</div>");
+			if (typeof scheduleJeopardyCategoryHeaderFit === 'function') {
+				scheduleJeopardyCategoryHeaderFit(document.getElementById('tempGAME'));
+			}
+		}
+	}
+
+	function scheduleQuestionRevealedTextFit() {
+		if (typeof schedulePlayerQuestionRevealedFit === 'function') {
+			schedulePlayerQuestionRevealedFit();
+		}
+	}
+
+	/** Server tells us FJ phase so refresh/reconnect is not stuck on "look at the game board". */
+	function applyFinalJeopardyReconnectState(state) {
+		displayCategories(false);
+		$('#tempGAME').stop(true, true).hide();
+		var fjWager = !!state['final-jeopardy-wagering'];
+		var fjAnswer = !!state['final-jeopardy-answer'];
+		var fjCat = state['final-jeopardy-category'];
+		var fjQ = state['final-jeopardy-question'];
+		var fjBetRecorded = state['final-jeopardy-player-bet'];
+
+		if (fjAnswer && fjQ) {
+			curQuestionId = 'FJ_0_0';
+			$('#question_revealed').html(fjQ).css('display', 'block');
+			scheduleQuestionRevealedTextFit();
+			$('.player_buzzer').css('display', 'none');
+			$('.player_bet_field').css('display', 'none');
+			switchBuzzer(false);
 			staticMessageOff();
-		   	displayCategories(true);
-	   }
+			return;
+		}
+
+		if (fjWager && fjCat) {
+			curQuestionId = 'FJ_0_0';
+			$('#question_revealed').html(fjCat).css('display', 'block');
+			scheduleQuestionRevealedTextFit();
+			$('.player_buzzer').css('display', 'none');
+			var hasBet =
+				fjBetRecorded !== undefined &&
+				fjBetRecorded !== null &&
+				fjBetRecorded !== '';
+			if (hasBet) {
+				$('.player_bet_field').css('display', 'none');
+				postScreenMessage(
+					'You wagered ' + fjBetRecorded + '. Waiting for other players.',
+					false,
+					0
+				);
+			} else {
+				$('.player_bet_field').css('display', 'block');
+				$('#bet_field').focus();
+				staticMessageOff();
+			}
+			return;
+		}
+
+		postScreenMessage(
+			'Final Jeopardy is in progress. Watch the main screen for the category; this phone will ask for your wager when the host announces it. If everyone is stuck, ask the host to use <b>New game</b> on the main board.',
+			false,
+			0
+		);
+	}
+
+	function applyPlayedQuestionsFromReload(playedIds) {
+		if (!playedIds || !playedIds.length) {
+			return;
+		}
+		var i;
+		for (i = 0; i < playedIds.length; i++) {
+			eliminateQuestion(playedIds[i]);
+		}
+	}
+
+	socket.on('update-state-reload', function(state){
+		console.log('update-state-reload', state);
+		var n = state['player-name'];
+		if (!n) {
+			return;
+		}
+		playerName = n;
+		persistPlayerName(playerName);
+		var sc = state['player-score'];
+		playerScore = typeof sc === 'number' ? sc : parseInt(sc, 10) || 0;
+		activePlayerName = state['active-player-name'];
+		finalJeopardyCheck = !!state['final-jeopardy-check'];
+		var rt = state['round-timer'];
+		if (typeof rt === 'number') {
+			roundTimer = rt;
+		}
+		var at = state['answer-time'];
+		if (typeof at === 'number') {
+			answerTime = at;
+		}
+		$('#login_container').css('display', 'none');
+		$('.player_field').css('display', 'block');
+		scheduleQuestionRevealedTextFit();
+		if (!$('#player_name').length) {
+			$('.player_field_info').append("<h2 id='player_name'>" + playerName + "</h2>");
+			$('.player_field_info').append("<h2 id='player_score'>" + playerScore + "</h2>");
+		} else {
+			$('#player_name').text(playerName);
+			$('#player_score').html(playerScore);
+		}
+		staticMessageOff();
+
+		if (!state.active) {
+			displayCategories(false);
+			return;
+		}
+
+		if (finalJeopardyCheck) {
+			applyFinalJeopardyReconnectState(state);
+			return;
+		}
+
+		ensurePlayerBoardMarkup(state['game-markup']);
+		applyPlayedQuestionsFromReload(state['played-question-ids']);
+
+		var categoryOpen = !!state['category-select-open'];
+		var clueOn = !!state['clue-in-progress'];
+		var buzzedName = state['buzzed-in-player-name'];
+
+		if (clueOn) {
+			displayCategories(false);
+			var qText = state['question-text'];
+			var qId = state['cur-question-id'];
+			var isDd = !!state['daily-double'];
+			curQuestionId = qId || '';
+			clicked = false;
+			listenForClicks = true;
+			pressedAnswer = false;
+			blockClicks = false;
+			buzzerLock = false;
+			if (isDd) {
+				postScreenMessage('Please look at the game board for the Daily Double.', false, 0);
+				$('#tempGAME').stop(true, true).hide();
+				return;
+			}
+			$('#question_revealed').html(qText || '').css('display', 'block');
+			scheduleQuestionRevealedTextFit();
+			$('#timer_table').find('td').css('background-color', 'rgb(239, 83, 80)');
+			questionTimerServer = typeof state['question-timer-count'] === 'number' ? state['question-timer-count'] : 0;
+			buzzerOpen = false;
+			$('.buzzer').css('background-color', 'rgb(105,105,105)');
+			if (buzzedName) {
+				if (buzzedName === playerName) {
+					buzzerLock = true;
+					switchBuzzer(false);
+					var bic = state['buzzed-in-timer-count'];
+					beginCountdown(typeof bic === 'number' ? bic : answerTime);
+				} else {
+					postScreenMessage(buzzedName + ' buzzed in and is typing their answer.', false, 0);
+				}
+			} else if (state['player-buzzer-unlocked'] && !state['buzzer-flipped']) {
+				buzzerOpen = true;
+				$('.buzzer').css('background-color', 'rgb(76, 175, 80)');
+			}
+			$('#tempGAME').stop(true, true).hide();
+			return;
+		}
+
+		if (categoryOpen) {
+			$('#question_revealed').html('Your Question Will Appear Here');
+			scheduleQuestionRevealedTextFit();
+			buzzerOpen = false;
+			$('.buzzer').css('background-color', 'rgb(105,105,105)');
+			if (playerName === activePlayerName) {
+				clicked = false;
+				displayCategories(true);
+			} else {
+				$('#tempGAME').stop(true, true).hide();
+				postScreenMessage('Please wait for ' + activePlayerName + ' to pick a category.', false, 0);
+			}
+			return;
+		}
+
+		/* Between clues: waiting for host to open category select */
+		$('#tempGAME').stop(true, true).hide();
+		$('#question_revealed').html('Your Question Will Appear Here');
+		scheduleQuestionRevealedTextFit();
+		buzzerOpen = false;
+		$('.buzzer').css('background-color', 'rgb(105,105,105)');
+		if (roundTimer > 0) {
+			if (playerName === activePlayerName) {
+				postScreenMessage("YOU'RE UP! PICK A QUESTION.", false, 0);
+			} else {
+				postScreenMessage('Please wait for ' + activePlayerName + ' to pick a category.', false, 0);
+			}
+		} else {
+			displayCategories(false);
+		}
 	});
 
 	socket.on('update buzzer interval', function(buzzerTimeData){
@@ -110,11 +367,27 @@ $(document).ready(function() {
 		'display', 'none'
 	);
 
-	$('#join').prop('disabled',true);
+	$('#join_btn').prop('disabled', true);
 
-	 $('#username').keyup(function(){
-        $('#join').prop('disabled', this.value == "" ? true : false);     
-    })
+	if (readStoredPlayerName()) {
+		$('#jeopardy_saved_name_hint').prop('hidden', false);
+	}
+	$('#jeopardy_clear_saved_player').on('click', function () {
+		try {
+			localStorage.removeItem(PLAYER_NAME_STORAGE_KEY);
+		} catch (e) { /* ignore */ }
+		autoLoginFromStorageDone = true;
+		$('#login_name').val('');
+		$('#join_btn').prop('disabled', true);
+		$('#jeopardy_saved_name_hint').prop('hidden', true);
+	});
+
+	$('#login_name').on('keyup', function (event) {
+		$('#join_btn').prop('disabled', this.value === '' ? true : false);
+		if (event.which === 13) {
+			$(this).blur();
+		}
+	});
 
 
 	 //PLAYER LOGIN
@@ -133,11 +406,10 @@ $(document).ready(function() {
 	  		}
 	  		else
 	  		{
-	  			$('#join_btn').prop('disabled',true);
+	  			$('#join_btn').prop('disabled', true);
+	  			autoLoginFromStorageDone = true;
+	  			beginPlayerJoin(loginNameStripped);
 	  			socket.emit('login name', loginNameStripped);
-	  			playerName = loginNameStripped;
-	  			$(".player_field_info").append("<h2 id='player_name'>" + playerName + "</h2>");
-	  			$(".player_field_info").append("<h2 id='player_score'>0</h2>");
         	}
         	return false;
       });
@@ -147,12 +419,6 @@ $(document).ready(function() {
     	e.preventDefault();
     	document.activeElement.blur();
 	});*/
-
-	  $('#login_name').keyup(function(event) {
-		    if (event.which === 13) {
-		      $(this).blur();
-		    }
-		});
 
 	  socket.on('option select new', function(name){
 	  		if(playerName == name){
@@ -203,6 +469,7 @@ $(document).ready(function() {
 				setTimeout(function(){
 					$("#login_container").css('display', 'none');
 					$(".player_field").css('display', 'block');
+					scheduleQuestionRevealedTextFit();
 				}, 3000);
 		}	
 
@@ -214,6 +481,7 @@ $(document).ready(function() {
 		  		setTimeout(function(){
 		  			$("#login_container").css('display', 'none');
 		  			$(".player_field").css('display', 'block');
+		  			scheduleQuestionRevealedTextFit();
 		  		}, 3000);
 	  		}
 	  });
@@ -233,7 +501,9 @@ $(document).ready(function() {
 	   		if (data.newGame == "new game")
 	   		{
 	   			$('.player_field').append("<div id='tempGAME'>" + data.gameMarkup + "</div>");
-	   			
+	   			if (typeof scheduleJeopardyCategoryHeaderFit === 'function') {
+	   				scheduleJeopardyCategoryHeaderFit(document.getElementById('tempGAME'));
+	   			}
 	   			activePlayerName = data.playerName;
 	   		}
 	   		else
@@ -247,6 +517,7 @@ $(document).ready(function() {
 	   				{
 		   				
 		   				$("#question_revealed").html("Your Question Will Appear Here");
+		   				scheduleQuestionRevealedTextFit();
 				   		if (data.playerName == playerName)  //assign active player to player if they got the question right
 				   		{
 				   			postScreenMessage("YOU'RE UP! PICK A QUESTION.", false, 0);
@@ -281,6 +552,9 @@ $(document).ready(function() {
 
 	   socket.on('second round started', function(content){
 	   		$("#tempGAME").html(content);
+	   		if (typeof scheduleJeopardyCategoryHeaderFit === 'function') {
+	   			scheduleJeopardyCategoryHeaderFit(document.getElementById('tempGAME'));
+	   		}
 	   		displayCategories(false);
 	   		postScreenMessage("Please look at the game board.", false, 0);
 	   });
@@ -303,6 +577,7 @@ $(document).ready(function() {
 	   		}
 
 	   		$("#question_revealed").html("Your Question Will Appear Here");
+	   		scheduleQuestionRevealedTextFit();
 	   });
 
 	   socket.on('final jeopardy time out', function(){
@@ -363,7 +638,9 @@ $(document).ready(function() {
 	  socket.on('expose question', function(){
 	  	console.log("THIS PLAYER EXPOSED QUESTION DEVICE IS: " + playerName);
 	  	socket.emit("expose question test", "THIS PLAYER EXPOSED QUESTION DEVICE IS: " + playerName);
-	  	$("#question_revealed").slideDown(1500);
+	  	$("#question_revealed").slideDown(1500, function () {
+	  		scheduleQuestionRevealedTextFit();
+	  	});
 	  });
 
 	  //capture timer expiration from other player, times up does not call score update
@@ -475,6 +752,7 @@ $(document).ready(function() {
 	 		$("#answer_btn").prop("disabled", true);
 	 		$("#answer_btn").css("background-color", "rgb(105,105,105)");
 	 		$("#question_revealed").html(response.question);
+	 		scheduleQuestionRevealedTextFit();
 	 		$(".player_bet_field").css("display", "none");
 	 		curQuestionId = response.questionId;
 	 		switchBuzzer(false);
@@ -623,6 +901,7 @@ $(document).ready(function() {
 	 	endCountdown();
 	 	postScreenMessage("Please look at the screen.", false, 0);
 	 	$("#question_revealed").html("Your Question Will Appear Here");
+	 	scheduleQuestionRevealedTextFit();
 	 });
 
 	socket.on('final jeopardy bid', function(categoryName){
@@ -630,6 +909,7 @@ $(document).ready(function() {
 	 	endCountdown();
 	 	displayCategories(false);
 	 	$("#question_revealed").html(categoryName);
+	 	scheduleQuestionRevealedTextFit();
 		$(".player_buzzer").css("display", "none");
 		$(".player_bet_field").css("display", "block");
 		$("#bet_field" ).focus();
@@ -638,6 +918,7 @@ $(document).ready(function() {
 
 	socket.on('open response final jeopardy', function(question){
 		$("#question_revealed").html(question);
+		scheduleQuestionRevealedTextFit();
   		$(".player_bet_field").css("display", "none");
 		switchBuzzer(false);
 		staticMessageOff();
@@ -972,5 +1253,17 @@ $(document).ready(function() {
 			$('#start_img').attr('src', IMAGES_DIR + 'mic-slash.gif');
 			start_timestamp = event.timeStamp;
 		});
+	}
+
+	socket.on('reconnect', function () {
+		if (playerName) {
+			socket.emit('login name', playerName);
+		}
+	});
+
+	if (socket.connected) {
+		attemptAutoLoginFromStorage();
+	} else {
+		socket.on('connect', attemptAutoLoginFromStorage);
 	}
 });

@@ -11,6 +11,16 @@
   </head>
   <body>
    <button type="button" id="host_sound_toggle" class="host-sound-toggle" aria-live="polite" title="Sound: click to enable (browsers block audio until you interact)">🔇</button>
+   <div id="host_room_code_panel" class="host-room-code-panel" aria-live="polite">
+     <span class="host-room-code-panel__label">Room code</span>
+     <span id="host_room_code_value" class="host-room-code-panel__code" title="Players enter this on /home">----</span>
+     <span class="host-room-code-panel__hint">Players: <code>/home</code> or <code>/player?room=</code> + this code</span>
+   </div>
+   <button type="button" id="host_new_game_btn" class="host-new-game-btn" title="Reset scores and start a fresh game for everyone">New game</button>
+   <div id="host_player_roster" class="host-player-roster" aria-live="polite" aria-label="Players who have joined this room">
+     <span class="host-player-roster__label">Joined</span>
+     <span id="host_player_roster_names" class="host-player-roster__names">None yet — players use <code>/home</code> or <code>/player?room=</code> with this code.</span>
+   </div>
    <div id="host_ai_judging" class="host-ai-judging host-ai-judging--hidden" aria-live="polite" aria-hidden="true" role="status">
      <div class="host-ai-judging__inner">
        <span class="host-ai-judging__label">Checking answer with AI…</span>
@@ -100,6 +110,7 @@
     <script src="/javascript/libraries/gradients.js"></script>
     <script src="/javascript/libraries/easing.js"></script>
     <script src="/javascript/libraries/cycle_all.js"></script>
+    <script src="/javascript/board_category_headers.js"></script>
     <script src="/javascript/pages/game_field.js"></script>
   </body>
 </html>

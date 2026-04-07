@@ -1,5 +1,23 @@
 @import url(zain-fonts.css);
 
+.login-saved-hint {
+  margin-top: 12px;
+  text-align: center;
+}
+.login-clear-saved {
+  font-family: 'Zain', sans-serif;
+  font-size: 12px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  cursor: pointer;
+}
+.login-clear-saved:active {
+  background: rgba(255, 255, 255, 0.25);
+}
+
 body,html{width:100%;height:100%;}
 .wrap{width:300px;}
 .center{
