@@ -2,39 +2,38 @@ $(document).ready(function () {
   var socket = io('/home');
 
   $('.player_join_button').on('click', function () {
-    Swal.fire({
+    SimpleModal.prompt({
       title: 'Room code',
       text: 'Enter the code shown on the host screen.',
-      input: 'text',
-      inputPlaceholder: 'e.g. AB12',
-      showCancelButton: true,
-      confirmButtonText: 'Join',
-      cancelButtonText: 'Cancel',
-      inputValidator: function (value) {
+      placeholder: 'e.g. AB12',
+      confirmText: 'Join',
+      cancelText: 'Cancel',
+      validate: function (value) {
         if (!value || !value.trim()) {
           return 'Enter a room code.';
         }
+        return null;
       },
-    }).then(function (result) {
-      if (result.isConfirmed && result.value) {
-        socket.emit('room code sent', result.value.trim());
+    }).then(function (value) {
+      if (value != null && value.trim()) {
+        socket.emit('room code sent', value.trim());
       }
     });
   });
 
   socket.on('room code validated', function (roomCodeValidate) {
     if (roomCodeValidate) {
-      Swal.fire({
-        icon: 'success',
+      SimpleModal.alert({
         title: 'Room code accepted',
+        text: '',
+        type: 'success',
         timer: 2000,
-        showConfirmButton: false,
       });
     } else {
-      Swal.fire({
-        icon: 'error',
+      SimpleModal.alert({
         title: 'Invalid room code',
         text: 'Check with the host and try again.',
+        type: 'error',
       });
     }
   });

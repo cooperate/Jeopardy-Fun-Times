@@ -16,6 +16,12 @@ const app = express();
 const http = require('http').Server(app);
 const io = require('socket.io')(http);
 
+// Browsers request /favicon.ico by default; serve project SVG so there is no 404.
+app.get('/favicon.ico', function (req, res) {
+	res.type('image/svg+xml');
+	res.sendFile(path.join(__dirname, 'favicon.svg'));
+});
+
 app.use(express.static(__dirname + '/'));
 
 app.get('/', function (req, res) {
@@ -24,9 +30,11 @@ app.get('/', function (req, res) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/zain-fonts.css">
   <title>Jeopardy — start here</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 2.5rem auto; padding: 0 1.25rem; line-height: 1.55; color: #1a1a1a; }
+    body { font-family: 'Zain', system-ui, sans-serif; max-width: 32rem; margin: 2.5rem auto; padding: 0 1.25rem; line-height: 1.55; color: #1a1a1a; }
     h1 { font-size: 1.35rem; font-weight: 700; }
     ul { padding-left: 1.1rem; }
     li { margin: 0.6rem 0; }
