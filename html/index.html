@@ -5,11 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, shrink-to-fit=no">
     <meta name="theme-color" content="#000000">
     <title>Jeopardy!</title>
-    <link rel="stylesheet" type="text/css" href="../css/style.css" >
-    <link rel="stylesheet" type="text/css" href="../css/game_intro.css" >
+    <link rel="stylesheet" type="text/css" href="/css/style.css" >
+    <link rel="stylesheet" type="text/css" href="/css/game_intro.css" >
   </head>
   <body>
    <button type="button" id="host_sound_toggle" class="host-sound-toggle" aria-live="polite" title="Sound: click to enable (browsers block audio until you interact)">🔇</button>
+   <div id="host_ai_judging" class="host-ai-judging host-ai-judging--hidden" aria-live="polite" aria-hidden="true" role="status">
+     <div class="host-ai-judging__inner">
+       <span class="host-ai-judging__label">Checking answer with AI…</span>
+       <span class="host-ai-judging__player" id="host_ai_judging_player"></span>
+     </div>
+   </div>
    <div id="master_container">
       <div id="game_container">
         <div id="game_board_container">
@@ -55,7 +61,7 @@
         </div>
       </div>
       <div id="message_overlay">
-        <img src="../game-media/images/jeopardy-logo.png" id="message_overlay_logo">
+        <img src="/game-media/images/jeopardy-logo.png" id="message_overlay_logo">
       </div>
       <div>
       <h2 id='player_timer_text'></h2>
@@ -87,12 +93,12 @@
         <div class = "player_name_bubble" id="player_name_bubble_3"></div>
       </div>
     </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.7.3/socket.io.js"></script>
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
-    <script src="../javascript/libraries/jquery-ui.min.js"></script>
-    <script src="../javascript/libraries/gradients.js"></script>
-    <script src="../javascript/libraries/easing.js"></script>
-    <script src="../javascript/libraries/cycle_all.js"></script>
-    <script src="../javascript/pages/game_field.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/javascript/libraries/jquery-3.7.1.min.js"></script>
+    <script src="/javascript/libraries/jquery-ui.min.js"></script>
+    <script src="/javascript/libraries/gradients.js"></script>
+    <script src="/javascript/libraries/easing.js"></script>
+    <script src="/javascript/libraries/cycle_all.js"></script>
+    <script src="/javascript/pages/game_field.js"></script>
   </body>
 </html>

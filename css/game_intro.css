@@ -58,3 +58,62 @@ HTML, BODY {
 .host-sound-toggle.host-sound-off {
   opacity: 0.92;
 }
+
+/* Host: AI answer judge in progress */
+.host-ai-judging {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99990;
+  max-width: min(92vw, 520px);
+  pointer-events: none;
+}
+.host-ai-judging--hidden {
+  display: none !important;
+}
+.host-ai-judging__inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(20, 40, 90, 0.95), rgba(0, 25, 60, 0.97));
+  color: #fff;
+  font-family: Impact, Charcoal, sans-serif;
+  font-size: clamp(14px, 2.2vw, 20px);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 234, 0, 0.35);
+  animation: host-ai-judging-pulse 1.4s ease-in-out infinite;
+}
+@keyframes host-ai-judging-pulse {
+  0%, 100% {
+    border-color: rgba(255, 234, 0, 0.35);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  }
+  50% {
+    border-color: rgba(255, 234, 0, 0.65);
+    box-shadow: 0 4px 28px rgba(255, 234, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  }
+}
+.host-ai-judging__label {
+  color: #ffea00;
+  text-shadow: 1px 1px 0 #000;
+}
+.host-ai-judging__player {
+  color: #e3f2fd;
+  font-weight: normal;
+  letter-spacing: 0.02em;
+}
+.host-ai-judging__player:empty {
+  display: none;
+}
+.host-ai-judging__player:not(:empty)::before {
+  content: "· ";
+  color: rgba(255, 255, 255, 0.5);
+}

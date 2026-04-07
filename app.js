@@ -667,6 +667,12 @@ playerSpc.on('connection', function(socket){
 			aiEnabled: config.openaiAnswerJudgeEnabled,
 			openaiApiKey: config.openaiApiKey,
 			openaiModel: config.openaiModel,
+			onAiJudgingStart: function () {
+				gameSpc.emit('answer ai judging', {
+					playerName: playerName,
+					questionId: questionId,
+				});
+			},
 		})
 			.then(function (result) {
 				correct = result.correct;
@@ -732,6 +738,7 @@ playerSpc.on('connection', function(socket){
 			})
 			.catch(function (err) {
 				console.error('evaluateAnswer failed', err);
+				gameSpc.emit('answer ai judging end');
 			});
 	}
 });

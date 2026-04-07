@@ -7,10 +7,10 @@
 	<meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, shrink-to-fit=no">
     <meta name="theme-color" content="#000000">
-	<link rel="stylesheet" type="text/css" href="../css/style.css" >
-	<link rel="stylesheet" type="text/css" href="../css/input_name.css" >
-	<link rel="stylesheet" href="../node_modules/sweetalert2/dist/sweetalert2.min.css">
-	<link rel="stylesheet" href="../css/custom_radio.css">
+	<link rel="stylesheet" type="text/css" href="/css/style.css" >
+	<link rel="stylesheet" type="text/css" href="/css/input_name.css" >
+	<link rel="stylesheet" href="/node_modules/sweetalert2/dist/sweetalert2.min.css">
+	<link rel="stylesheet" href="/css/custom_radio.css">
 </head>
 <body>
 	<div class="game_options">
@@ -63,7 +63,7 @@
 		</div>
 	</div>
 	<div id="message_overlay">
-		<img src="../game-media/images/jeopardy-logo.png" id="message_overlay_logo">
+		<img src="/game-media/images/jeopardy-logo.png" id="message_overlay_logo">
 	</div>
 	<div class = "player_field">
 		<div class = "player_field_container">
@@ -79,7 +79,7 @@
 						<input id="answer_field" autocomplete="off" placeholder="What is..."/><button type="submit" id="answer_btn">Submit</button>
 					</form>
 					<button type="button" id="start_button" class="mic_button" aria-label="Dictate answer with microphone" title="Dictate answer (uses your device microphone)">
-						<img id="start_img" src="../game-media/images/mic.gif" alt="">
+						<img id="start_img" src="/game-media/images/mic.gif" alt="">
 					</button>
 				</div>
 				<p id="mic_unsupported" class="mic_unsupported" hidden>Speech recognition is not supported in this browser. Type your answer instead.</p>
@@ -105,11 +105,12 @@
 			<h2 id="active_message"></h2>
 		</div>
 	</div>
-	<script src="../node_modules/sweetalert2/dist/sweetalert2.min.js"></script>
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.7.3/socket.io.js"></script>
-	<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
-    <script src="../javascript/libraries/transit.min.js"></script>
-	<script src="../javascript/pages/player_field.js"></script>
-	<script src="../javascript/libraries/gradients.js"></script>
+	<script src="/node_modules/sweetalert2/dist/sweetalert2.min.js"></script>
+	<!-- Same-origin scripts avoid long hangs when CDN (cdnjs / Google) is slow or blocked -->
+	<script src="/socket.io/socket.io.js"></script>
+	<script src="/javascript/libraries/jquery-3.7.1.min.js"></script>
+    <script src="/javascript/libraries/transit.min.js"></script>
+	<script src="/javascript/pages/player_field.js"></script>
+	<script src="/javascript/libraries/gradients.js"></script>
 </body>
 </html>
