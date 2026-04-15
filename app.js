@@ -116,6 +116,104 @@ function getRoomFromSocket(socket) {
 	return gameRooms.get(socket.roomCode) || null;
 }
 
+function clearCategoryAutoPickTimer(room) {
+	if (!room || !room.categoryAutoPickTimer) {
+		return;
+	}
+	clearTimeout(room.categoryAutoPickTimer);
+	room.categoryAutoPickTimer = null;
+}
+
+function pickRandomUnplayedClueId(room) {
+	if (!room || !room.questions) {
+		return null;
+	}
+	var ids = [];
+	for (var id in room.questions) {
+		if (!Object.prototype.hasOwnProperty.call(room.questions, id)) {
+			continue;
+		}
+		if (id === 'FJ_0_0') {
+			continue;
+		}
+		if (room.playedClueIds.has(id)) {
+			continue;
+		}
+		ids.push(id);
+	}
+	if (!ids.length) {
+		return null;
+	}
+	return ids[Math.floor(Math.random() * ids.length)];
+}
+
+function scheduleCategoryAutoPick(room) {
+	if (!room) {
+		return;
+	}
+	clearCategoryAutoPickTimer(room);
+	room.categoryAutoPickTimer = setTimeout(function () {
+		room.categoryAutoPickTimer = null;
+		if (
+			!room.categorySelectOpen ||
+			room.clueInProgress ||
+			room.roundTimer <= 0
+		) {
+			return;
+		}
+		var qid = pickRandomUnplayedClueId(room);
+		if (!qid) {
+			return;
+		}
+		applyQuestionSelection(room, qid);
+	}, 10000);
+}
+
+function applyQuestionSelection(room, questionId) {
+	if (!room || !questionId) {
+		return;
+	}
+	if (!room.questions[questionId]) {
+		return;
+	}
+	if (room.clueInProgress) {
+		return;
+	}
+	if (room.playedClueIds.has(questionId)) {
+		return;
+	}
+	if (room.roundTimer <= 0) {
+		return;
+	}
+	clearCategoryAutoPickTimer(room);
+	room.questionTimerCount = 6;
+	console.log('QUESTION SELECTED ID: ' + questionId);
+	room.buzzerFlipped = false;
+	room.categorySelectOpen = false;
+	room.clueInProgress = true;
+	room.playerBuzzerUnlocked = false;
+	room.buzzedInPlayerName = undefined;
+	stopTimer(room.buzzedInTimer);
+	room.buzzedInTimer = null;
+	room.buzzedInTimerCount = room.answerTime;
+	room.questionTimer = null;
+	allPlayersNoAnswer(room);
+	room.curQuestionId = questionId;
+	room.playedClueIds.add(questionId);
+	console.log('Question:' + JSON.stringify(room.questions[questionId]));
+	emitGame(room.code, 'question reveal', {
+		question: room.questions[questionId]._question,
+		questionId: questionId,
+		playerName: getPlayerActive(room),
+	});
+	emitPlayers(room.code, 'question reveal', {
+		question: room.questions[questionId]._question,
+		dailyDouble: room.questions[questionId]._dailyDouble,
+		questionId: questionId,
+		playerName: getPlayerActive(room),
+	});
+}
+
 //babyparse is deprecated now
 var Baby = require('papaparse');
 var file = __dirname + '/data/JEOPARDY_CSV_test.csv';
@@ -276,6 +374,7 @@ gameSpc.on('connection', function (socket) {
 			return;
 		}
 		console.log('host request new game');
+		clearCategoryAutoPickTimer(r);
 		r.pendingHostForcedNewGame = true;
 		r.newGameCounter = 0;
 		r.finalJeopardyWageringPhase = false;
@@ -317,6 +416,7 @@ gameSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
+		clearCategoryAutoPickTimer(r);
 		r.lastPlayerBoardMarkup = typeof content === 'string' ? content : r.lastPlayerBoardMarkup;
 		r.categorySelectOpen = false;
 		r.clueInProgress = false;
@@ -330,6 +430,7 @@ gameSpc.on('connection', function (socket) {
 		}
 		r.categorySelectOpen = true;
 		emitPlayers(r.code, 'open question category new round', getPlayerActive(r));
+		scheduleCategoryAutoPick(r);
 	});
 
 	socket.on('open question category', function (playerNameActive) {
@@ -341,6 +442,7 @@ gameSpc.on('connection', function (socket) {
 		r.categorySelectOpen = true;
 		setPlayerActive(r, r.players[playerNameActive]);
 		emitPlayers(r.code, 'open question category', playerNameActive);
+		scheduleCategoryAutoPick(r);
 	});
 
 	socket.on('next round started', function () {
@@ -536,12 +638,20 @@ gameSpc.on('connection', function (socket) {
 		}
 		console.log('Next player should be going...');
 		returnToBoardPickerState(r);
+		var gained = !!r.pendingGainedBoardOnCorrect;
+		r.pendingGainedBoardOnCorrect = false;
+		var activeName = getPlayerActive(r);
 		emitPlayers(r.code, 'active player', {
-			playerName: getPlayerActive(r),
+			playerName: activeName,
 			correct: true,
 			newGame: 'no',
+			gainedBoardControl: gained,
 		});
-		emitGame(r.code, 'active player', { playerName: getPlayerActive(r), correct: true });
+		emitGame(r.code, 'active player', {
+			playerName: activeName,
+			correct: true,
+			gainedBoardControl: gained,
+		});
 	});
 
 	socket.on('all messages done score update', function () {
@@ -581,6 +691,8 @@ gameSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
+		clearCategoryAutoPickTimer(r);
+		r.pendingGainedBoardOnCorrect = false;
 		r.pendingHostForcedNewGame = false;
 		r.newGameCounter = 0;
 		r.buzzerFlipped = false;
@@ -733,34 +845,7 @@ playerSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
-		r.questionTimerCount = 6;
-		console.log('QUESTION SELECTED ID: ' + questionId);
-		r.buzzerFlipped = false;
-		if (r.roundTimer > 0) {
-			r.categorySelectOpen = false;
-			r.clueInProgress = true;
-			r.playerBuzzerUnlocked = false;
-			r.buzzedInPlayerName = undefined;
-			stopTimer(r.buzzedInTimer);
-			r.buzzedInTimer = null;
-			r.buzzedInTimerCount = r.answerTime;
-			r.questionTimer = null;
-			allPlayersNoAnswer(r);
-			r.curQuestionId = questionId;
-			r.playedClueIds.add(questionId);
-			console.log('Question:' + JSON.stringify(r.questions[questionId]));
-			emitGame(r.code, 'question reveal', {
-				question: r.questions[questionId]._question,
-				questionId: questionId,
-				playerName: getPlayerActive(r),
-			});
-			emitPlayers(r.code, 'question reveal', {
-				question: r.questions[questionId]._question,
-				dailyDouble: r.questions[questionId]._dailyDouble,
-				questionId: questionId,
-				playerName: getPlayerActive(r),
-			});
-		}
+		applyQuestionSelection(r, questionId);
 	});
 
 	socket.on('buzzer pressed', function (playerName) {
@@ -949,9 +1034,19 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 
 			if (correct) {
 				score += value;
+				if (!finalJeopardy) {
+					var prevBoard = getPlayerActive(room);
+					room.pendingGainedBoardOnCorrect =
+						!prevBoard || prevBoard !== playerName;
+				} else {
+					room.pendingGainedBoardOnCorrect = false;
+				}
 				setPlayerActive(room, room.players[playerName]);
 			} else {
 				score -= value;
+				if (!finalJeopardy) {
+					room.pendingGainedBoardOnCorrect = false;
+				}
 			}
 
 			if (finalJeopardy) {
@@ -1176,6 +1271,7 @@ function openTheBuzzer(room) {
 }
 
 function returnToBoardPickerState(room) {
+	clearCategoryAutoPickTimer(room);
 	room.clueInProgress = false;
 	room.categorySelectOpen = false;
 }
@@ -1516,6 +1612,7 @@ function setRoundTimer(room) {
 		emitPlayers(room.code, 'update round interval', room.roundTimer);
 
 		if (room.roundTimer === 0) {
+			clearCategoryAutoPickTimer(room);
 			room.categorySelectOpen = false;
 			emitPlayers(room.code, 'close category select');
 			stopTimer(room.roundTimerObject);

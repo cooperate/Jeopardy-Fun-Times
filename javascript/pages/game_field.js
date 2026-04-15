@@ -738,21 +738,21 @@ $(document).ready(function() {
 		   			if (roundTimer > 0) //prevent shitty messages to popup if round is over
 		   			{
 		   				console.log(roundTimer);
-						if (activePlayerName == data.playerName)
-						{
-							if (newRound == true)
-							{
-								message =  data.playerName + ", you have the board.";
+						if (data.correct === true) {
+							if (data.gainedBoardControl) {
+								message = data.playerName + ", you have the board.";
+							} else {
+								message = data.playerName + ", still yours.";
+							}
+						} else if (activePlayerName == data.playerName) {
+							if (newRound == true) {
+								message = data.playerName + ", you have the board.";
 								newRound = false;
+							} else {
+								message = data.playerName + ", still yours.";
 							}
-							else
-							{
-								message =  data.playerName + ", still yours.";
-							}
-						}
-						else
-						{
-							message =  data.playerName + ", you have the board.";
+						} else {
+							message = data.playerName + ", you have the board.";
 						}
 						console.log(message);
 						var msgRead = false;
