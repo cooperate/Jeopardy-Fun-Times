@@ -348,6 +348,34 @@ $(document).ready(function() {
 		$("#timer_table").find("td").css("background-color", "rgb(239, 83, 80)");
 	}
 
+	function focusAnswerFieldWithMobileKeyboard() {
+		var el = document.getElementById('answer_field');
+		if (!el) {
+			return;
+		}
+		var coarsePointer =
+			typeof window.matchMedia === 'function' &&
+			window.matchMedia('(pointer: coarse)').matches;
+		var ua = navigator.userAgent || '';
+		var isIOS =
+			/iPad|iPhone|iPod/i.test(ua) ||
+			(navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+		if (coarsePointer || isIOS) {
+			try {
+				el.readOnly = true;
+			} catch (e1) {}
+			el.focus({ preventScroll: true });
+			setTimeout(function () {
+				try {
+					el.readOnly = false;
+				} catch (e2) {}
+				el.focus({ preventScroll: true });
+			}, 10);
+		} else {
+			el.focus({ preventScroll: true });
+		}
+	}
+
 	function switchBuzzer(buzzerOn)
 	{
 		if (buzzerOn)
@@ -359,7 +387,7 @@ $(document).ready(function() {
 		{
 			$(".player_buzzer").css("display", "none");
 			$(".player_answer_field").css("display", "block");
-			$("#answer_field" ).focus();
+			focusAnswerFieldWithMobileKeyboard();
 		}
 	}
 
@@ -814,6 +842,7 @@ $(document).ready(function() {
 
 	 //on answer submission submit answer
 	 $( "#answer_submit" ).submit(function( event ) {
+	 	event.preventDefault();
 	 	if (!pressedAnswer)
 	 	{
 		 	stopSpeechRecognition();
@@ -858,10 +887,18 @@ $(document).ready(function() {
     	document.activeElement.blur();
 	});*/
 
-	  $('#answer_field').keyup(function(event) {
-		    if (event.which === 13) {
-		      $(this).blur();
-		    }
+	  $('#answer_field').on('keydown', function (e) {
+			if (e.which !== 13 && e.keyCode !== 13) {
+				return;
+			}
+			if (e.shiftKey) {
+				return;
+			}
+			if ($('.player_answer_field').css('display') === 'none') {
+				return;
+			}
+			e.preventDefault();
+			$('#answer_submit').trigger('submit');
 		});
 
 	 //on answer determination 
