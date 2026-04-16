@@ -310,6 +310,34 @@ $(document).ready(function() {
 		var code = typeof payload === 'string' ? payload : payload && payload.code;
 		if (code) {
 			$('#host_room_code_value').text(code);
+			if ($(document.body).hasClass('host-board-active')) {
+				updateHostRoundTimerDisplay();
+			}
+		}
+	});
+
+	socket.on('host game load status', function (data) {
+		var el = $('#host_game_load_status');
+		if (!el.length) {
+			return;
+		}
+		var phase = data && data.phase;
+		var msg = data && data.message ? String(data.message) : '';
+		el.removeClass('host-game-load-status--error');
+		if (phase === 'done' || (!msg && phase !== 'error')) {
+			el.addClass('host-game-load-status--hidden').text('');
+			return;
+		}
+		if (phase === 'error') {
+			el.removeClass('host-game-load-status--hidden')
+				.addClass('host-game-load-status--error')
+				.text(msg || 'Game load failed.');
+			return;
+		}
+		if (msg) {
+			el.removeClass('host-game-load-status--hidden host-game-load-status--error').text(msg);
+		} else {
+			el.addClass('host-game-load-status--hidden').text('');
 		}
 	});
 
@@ -382,6 +410,10 @@ $(document).ready(function() {
 
 	 socket.on('answer time data', function(answerTimeData){
 	  	answerTime = answerTimeData;
+	  	$('#host_game_load_status')
+	  		.removeClass('host-game-load-status--error')
+	  		.addClass('host-game-load-status--hidden')
+	  		.text('');
 	  });
 
 	 function buildPlayerBox(name){
@@ -399,7 +431,7 @@ $(document).ready(function() {
       			<td>" + name + "</td>\
       			</tr>";
 
-      	if(playerCount < 3)
+      	if(playerCount < 5)
       	{
 	 		$('#players_table').append(content);
 	 		playerCount++;
@@ -436,12 +468,19 @@ $(document).ready(function() {
     	for (c=0; c<6; c++)
     	{
     		console.log("CONTENT BOARD " + roundMarkerId + c + "_" + "_0");
-    		var catTitle = String(questionList[roundMarkerId + c + "_0"].category)
+    		var catRaw = String(questionList[roundMarkerId + c + "_0"].category);
+    		var catTitle = catRaw
     			.replace(/&/g, '&amp;')
     			.replace(/</g, '&lt;')
     			.replace(/>/g, '&gt;')
     			.replace(/"/g, '&quot;');
-    		contentBoard += "<th><span class=\"category-header-text\"><span class=\"category-header-text__inner\">" + catTitle + "</span></span></th>";
+    		var catPlainAttr = encodeURIComponent(catRaw);
+    		contentBoard +=
+    			'<th><span class="category-header-text"><span class="category-header-text__inner" data-category-plain="' +
+    			catPlainAttr +
+    			'">' +
+    			catTitle +
+    			'</span></span></th>';
     		categories.push(questionList[roundMarkerId + c + "_0"].category);
     	}
 
@@ -522,14 +561,14 @@ $(document).ready(function() {
 
 	function restoreIntroNameBubblesFromSnapshot(players) {
 		var b;
-		for (b = 1; b <= 3; b++) {
+		for (b = 1; b <= 5; b++) {
 			$('#player_name_bubble_' + b).empty().hide();
 		}
 		if (!players || !players.length) {
 			return;
 		}
 		var j;
-		for (j = 0; j < players.length && j < 3; j++) {
+		for (j = 0; j < players.length && j < 5; j++) {
 			$('#player_name_bubble_' + (j + 1))
 				.append($('<h2>').text(players[j].name))
 				.fadeIn();
@@ -598,7 +637,7 @@ $(document).ready(function() {
 		animated = true;
 		nextRoundFinalJeopardyCalled = !finalJeopardyCheck;
 		hostRoundIsDoubleJeopardy = snapshot.boardRound === 'Double Jeopardy';
-		updateHostRoundTimerDisplay();
+		setHostBoardChromeActive(true);
 
 		if (
 			snapshot.activePlayerName &&
@@ -715,6 +754,7 @@ $(document).ready(function() {
 		   				$('#game_intro').slideUp("slow", function(){
 		   					playSound(dateSoundEffect);
 			   				$('#game_intro').css('display', 'none');
+							setHostBoardChromeActive(true);
 		   					setTimeout(function(){
 		   						playSound(openUpSound);
 		   						$('#airdate_screen').slideUp("slow", function(){
@@ -799,6 +839,19 @@ $(document).ready(function() {
 		return m + ':' + (s < 10 ? '0' : '') + s;
 	}
 
+	function hostRoomCodeForDisplay() {
+		var fromDom = ($('#host_room_code_value').text() || '').replace(/\s+/g, '').trim();
+		if (fromDom) {
+			return fromDom;
+		}
+		return hostRoomCode || '';
+	}
+
+	function setHostBoardChromeActive(active) {
+		$(document.body).toggleClass('host-board-active', !!active);
+		updateHostRoundTimerDisplay();
+	}
+
 	function updateHostRoundTimerDisplay() {
 		var wrap = $('#host_round_timer');
 		if (!wrap.length) {
@@ -807,7 +860,9 @@ $(document).ready(function() {
 		var sec = Math.max(0, parseInt(roundTimer, 10) || 0);
 		$('#host_round_timer_value').text(formatHostRoundClock(sec));
 		var label;
-		if (finalJeopardyCheck) {
+		if ($(document.body).hasClass('host-board-active')) {
+			label = hostRoomCodeForDisplay() || '----';
+		} else if (finalJeopardyCheck) {
 			label = 'FINAL J!';
 		} else if (hostRoundIsDoubleJeopardy) {
 			label = 'DOUBLE JEOPARDY';
@@ -965,7 +1020,10 @@ $(document).ready(function() {
 	socket.on('final jeopardy response', function(response){
 		playerFJObject = {playerName: response.playerName, bet: response.bet, buzzedInFJ: false};
 		playersFJ[response.playerName]= playerFJObject;
-		if(playerFJCounter >=2)
+		if (
+			playerNames.length > 0 &&
+			playerFJCounter >= playerNames.length - 1
+		)
 		{
 			displayQuestion(questionList["FJ_0_0"].question, "FJ_0_0");
 			postScreenMessage(questionList["FJ_0_0"].category + "</br></br>" + questionList["FJ_0_0"].question, false);
@@ -1024,7 +1082,7 @@ $(document).ready(function() {
 		    		speed:    100,
 		    		timeout: 10000,
 		    		after: function(){
-		    			if(index<3)
+		    			if(index<playerNamesArray.length)
 		    			{
 			    			var curPlayerObject = playersFJ[playerNamesArray[index]];
 			    			var correctText = "incorrect";
@@ -1124,6 +1182,12 @@ $(document).ready(function() {
 
     socket.on('new game', function(){
     	skipGameDataAfterHostRestore = false;
+    	playerFJCounter = 0;
+    	countScores = 0;
+    	$('#host_game_load_status')
+    		.removeClass('host-game-load-status--error')
+    		.addClass('host-game-load-status--hidden')
+    		.text('');
     	questionList.length = 0;
 		questionList = [];
 		categories.length = 0;
@@ -1141,7 +1205,7 @@ $(document).ready(function() {
 		dailyDoubleBet = 0;
 		roundTimer = 600;
 		hostRoundIsDoubleJeopardy = false;
-		updateHostRoundTimerDisplay();
+		setHostBoardChromeActive(false);
 		animated = false;
 		lockPlayers = false;
 		$("#message_overlay").css("background-color", "rgb(189, 189, 189)");
@@ -1173,7 +1237,12 @@ $(document).ready(function() {
 	  socket.on('question reveal',function(question){
 	  	timerCount = 6;
 	  	questionIsLive = true;
-	  	$("#" + question.questionId).html('');
+	  	var hostCell = document.getElementById(question.questionId);
+	  	if (hostCell) {
+	  		hostCell.innerHTML = '';
+	  	} else {
+	  		console.warn('question reveal: missing host board cell #' + question.questionId);
+	  	}
 	  	flashActiveOff(question.playerName);
 	  	getSoundAndFadeAudio(chooseCategoryTheme);
 	  	curQuestionId = question.questionId;
@@ -1911,7 +1980,7 @@ $(document).ready(function() {
 	$('#host_new_game_btn').on('click', function () {
 		if (
 			!window.confirm(
-				'Start a new game? This resets scores and loads a fresh board for the host and all three player phones.'
+				'Start a new game? This resets scores and loads a fresh board for the host and all player phones in this room.'
 			)
 		) {
 			return;
@@ -1951,7 +2020,7 @@ $(document).ready(function() {
     	finalJeopardyThemeEnded = true;
     	socket.emit('final jeopardy time out');
     	this.currentTime = 0;
-    	if(countScores>=3)
+    	if(countScores>=playerNames.length)
     	{
     		finalCeremonies();
     	}
@@ -1959,7 +2028,7 @@ $(document).ready(function() {
     	{
     		var lastTimer = setInterval(function()
     			{
-    				if(countScores>=3)
+    				if(countScores>=playerNames.length)
     				{
     					finalCeremonies();
     					clearInterval(lastTimer);
@@ -2171,6 +2240,8 @@ $(document).ready(function() {
 	numberPercent[0]=0;
 	numberPercent[1]=0;
 	numberPercent[2]=0;
+	numberPercent[3]=0;
+	numberPercent[4]=0;
 	var timePercent = new Array();
 	
 	//question timer for popups

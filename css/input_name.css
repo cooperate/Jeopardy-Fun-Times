@@ -1,11 +1,11 @@
-@import url(zain-fonts.css);
+@import url(korinna-fonts.css);
 
 .login-saved-hint {
   margin-top: 12px;
   text-align: center;
 }
 .login-clear-saved {
-  font-family: 'Zain', sans-serif;
+  font-family: 'Korinna', sans-serif;
   font-size: 12px;
   padding: 6px 10px;
   border: none;
@@ -30,14 +30,14 @@ body,html{width:100%;height:100%;}
   display:block;
     width: 100%;
     padding: 15px 0 15px 0px;
-    font-family: 'Zain', sans-serif;
+    font-family: 'Korinna', sans-serif;
     font-weight: 400;
     color: #377D6A;
     background: rgba(0,0,0,0.3);
     border: none;
     outline: none;
     color: #fff;
-    text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
+    text-shadow: var(--jeopardy-text-shadow);
     border: 1px solid rgba(0,0,0,0.3);
     border-radius: 4px;
     box-shadow: inset 0 -5px 45px rgba(100,100,100,0.2), 0 1px  1px rgba(255,255,255,0.2);
@@ -57,7 +57,7 @@ label{
     margin: 0;
     padding: 0;
     color:#fff;
-    font-family: 'Zain', sans-serif;
+    font-family: 'Korinna', sans-serif;
     font-size: 16px;
 }
 
@@ -111,7 +111,7 @@ label span{
   color: white;
   padding: 5%;
   font-size: 1.5rem;
-  font-family: 'Zain', sans-serif;
+  font-family: 'Korinna', sans-serif;
   letter-spacing: 2px;
   margin-top: 20px;
 }

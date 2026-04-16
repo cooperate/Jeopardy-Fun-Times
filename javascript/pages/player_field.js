@@ -49,6 +49,7 @@ $(document).ready(function() {
 	const IMAGES_DIR =  "../../game-media/images/";
 	var PLAYER_NAME_STORAGE_KEY = 'jeopardy.playerName';
 	var autoLoginFromStorageDone = false;
+	var waitForStartGameTimer = null;
 
 	function readStoredPlayerName() {
 		try {
@@ -448,57 +449,96 @@ $(document).ready(function() {
     	document.activeElement.blur();
 	});*/
 
-	  socket.on('option select new', function(name){
-	  		if(playerName == name){
-	  			$(".login").fadeOut('fast', function() {
-	  				$(".game_options").fadeIn('slow', function() {
-	  				});
-	  			});
-	  		}
+	  function setVoteFeedback(text, show) {
+	  	var el = document.getElementById('vote_feedback');
+	  	if (!el) {
+	  		return;
+	  	}
+	  	if (show === false || text === '') {
+	  		el.textContent = '';
+	  		el.hidden = true;
+	  		return;
+	  	}
+	  	el.textContent = text;
+	  	el.hidden = false;
+	  }
+
+	  function showGameOptionsPanel() {
+	  	clearTimeout(waitForStartGameTimer);
+	  	waitForStartGameTimer = null;
+	  	setVoteFeedback('', false);
+	  	if ($('#login_container').is(':visible')) {
+	  		$('.login').fadeOut('fast', function () {
+	  			$('.game_options').fadeIn('slow');
+	  		});
+	  	} else {
+	  		$('.game_options').fadeIn('slow');
+	  	}
+	  }
+
+	  socket.on('option select new', function () {
+	  	showGameOptionsPanel();
 	  });
+
+	  socket.on('game options vote progress', function (p) {
+	  	if (!p || typeof p.received !== 'number' || p.received >= p.needed) {
+	  		return;
+	  	}
+	  	setVoteFeedback(
+	  		'Votes ' + p.received + ' / ' + p.needed + ' — yours is in.',
+	  		true
+	  	);
+	  });
+
+	  socket.on('game setup loading', function () {
+	  	setVoteFeedback('Loading game…', true);
+	  });
+
+	  socket.on('game setup failed', function (payload) {
+	  	var msg =
+	  		(payload && payload.message) ||
+	  		'Could not load a game. Change your votes and try again.';
+	  	options_accept_clicked = false;
+	  	$('.game_options').find('select, button').prop('disabled', false);
+	  	setVoteFeedback(msg, true);
+	  	$('.game_options').show();
+	  });
+
 	var options_accept_clicked = false;
 
+	function finishOptionsPhaseAndShowField() {
+		setVoteFeedback('', false);
+		$('.game_options').css('display', 'none');
+		postScreenMessage('Please wait for the game to begin.', false, 0);
+		setTimeout(function () {
+			$('#login_container').css('display', 'none');
+			$('.player_field').css('display', 'block');
+			scheduleQuestionRevealedTextFit();
+		}, 3000);
+	}
+
 	$("#options_accept").click(function(){
-		var inputOptionsTime =  {
-		      '15': '15',
-		      '20': '20',
-		      '30': '30'
-		    };
-
-		var inputOptionsDecade = {
-		      '80\'s' : '80s',
-		      '90\'s' : '90s',
-		      '2000\'s' : '00s',
-		      '2010\'s' : '10s'
-		    };
-
 		if (!options_accept_clicked){
 			options_accept_clicked = true;
-			var time_radio; 
-			var decade_radio;
+			var time_option = String($('#vote_select_time').val() || '20');
+			var decade_option = String($('#vote_select_decade').val() || '20s');
+			var episode_filter_option = String($('#vote_select_episode').val() || 'any');
 
-			$('input[name="radio-group-time-option"]:checked').each(function() {
-				var idVal = $(this).attr("id");
-				time_radio = $("label[for='"+idVal+"']").text();
-			});
-			
-			$('input[name="radio-group-decade-option"]:checked').each(function() {
-				var idVal = $(this).attr("id");
-				decade_radio = $("label[for='"+idVal+"']").text();
-			});
-
-			var time_option = inputOptionsTime[time_radio];
-			var decade_option = inputOptionsDecade[decade_radio];
-
-			console.log("TIME OPTION: " + time_option + " DECADE OPTION: " + decade_option);
-				$(".game_options").css('display', 'none');
-				socket.emit('option select new', [time_option, decade_option]);
-				postScreenMessage("Please wait for the game to begin.", false, 0);
-				setTimeout(function(){
-					$("#login_container").css('display', 'none');
-					$(".player_field").css('display', 'block');
-					scheduleQuestionRevealedTextFit();
-				}, 3000);
+			console.log(
+				"TIME OPTION: " +
+					time_option +
+					" DECADE OPTION: " +
+					decade_option +
+					" EPISODE FILTER: " +
+					episode_filter_option
+			);
+			setVoteFeedback('Vote saved.', true);
+			$('.game_options').find('select, button').prop('disabled', true);
+			socket.emit('option select new', [
+				time_option,
+				decade_option,
+				episode_filter_option,
+			]);
 		}	
 
 	});
@@ -506,7 +546,9 @@ $(document).ready(function() {
 	  socket.on('wait for start game',function(name){
 	  		if(playerName == name){
 		  		postScreenMessage("Please wait for the game to begin.", false, 0);
-		  		setTimeout(function(){
+		  		clearTimeout(waitForStartGameTimer);
+		  		waitForStartGameTimer = setTimeout(function(){
+		  			waitForStartGameTimer = null;
 		  			$("#login_container").css('display', 'none');
 		  			$(".player_field").css('display', 'block');
 		  			scheduleQuestionRevealedTextFit();
@@ -516,6 +558,7 @@ $(document).ready(function() {
 
 	  socket.on('answer time data', function(answerTimeData){
 	  	answerTime = answerTimeData;
+	  	finishOptionsPhaseAndShowField();
 	  });
 
 	  
@@ -644,6 +687,8 @@ $(document).ready(function() {
 	  //capture question reveal
 	  socket.on('question reveal',function(question){
 	  	console.log("QUESTION REVEAL SOCKET DATA: " + question);
+	  	displayCategories(false);
+	  	eliminateQuestion(question.questionId);
 	  	listenForClicks = true;
 	  	pressedAnswer = false;
 	  	//daily double?

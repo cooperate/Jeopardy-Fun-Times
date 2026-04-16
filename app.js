@@ -14,7 +14,10 @@ const {
 	normalizeRoomCode: normRoom,
 	generateUniqueRoomCode,
 	ROUND_TIME,
+	MIN_PLAYERS_TO_START,
+	MAX_PLAYERS_PER_ROOM,
 } = require('./lib/gameRoom');
+const jarchiveDynamic = require('./lib/jarchiveDynamicGame');
 
 ensureGameHighScoreFile(config.paths.gameHighScore);
 
@@ -40,10 +43,10 @@ app.get('/', function (req, res) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/css/zain-fonts.css">
+  <link rel="stylesheet" href="/css/korinna-fonts.css">
   <title>Jeopardy — start here</title>
   <style>
-    body { font-family: 'Zain', system-ui, sans-serif; max-width: 32rem; margin: 2.5rem auto; padding: 0 1.25rem; line-height: 1.55; color: #1a1a1a; }
+    body { font-family: 'Korinna', sans-serif; text-shadow: none; max-width: 32rem; margin: 2.5rem auto; padding: 0 1.25rem; line-height: 1.55; color: #1a1a1a; }
     h1 { font-size: 1.35rem; font-weight: 700; }
     ul { padding-left: 1.1rem; }
     li { margin: 0.6rem 0; }
@@ -56,7 +59,7 @@ app.get('/', function (req, res) {
   <p>Open these URLs in the browser (same machine or same LAN, depending on how you run the server).</p>
   <ul>
     <li><strong>Host</strong>: <a href="/game"><code>/game</code></a> — create a room or enter a code; you are sent to <code>/game/ROOM</code> for the board.</li>
-    <li><strong>Players</strong>: <a href="/home"><code>/home</code></a> to enter the room code, or open <code>/player?room=ROOM</code> directly.</li>
+    <li><strong>Players</strong>: <a href="/home"><code>/home</code></a> to enter the room code, or open <code>/player?room=ROOM</code> directly. Each room supports 3–5 players (at least three are required before setup voting begins).</li>
   </ul>
   <p>Start the server with <code>npm start</code> (or <code>node app.js</code>), then use the links above.</p>
 </body>
@@ -124,16 +127,28 @@ function clearCategoryAutoPickTimer(room) {
 	room.categoryAutoPickTimer = null;
 }
 
+function clueIdMatchesRound(id, isSecondRound) {
+	if (id === 'FJ_0_0') {
+		return false;
+	}
+	if (isSecondRound) {
+		return id.indexOf('DJ_') === 0;
+	}
+	/* Jeopardy round: J_0_0 … not DJ_ */
+	return id.indexOf('J_') === 0;
+}
+
 function pickRandomUnplayedClueId(room) {
 	if (!room || !room.questions) {
 		return null;
 	}
+	var isDJ = room.isSecondRound === true;
 	var ids = [];
 	for (var id in room.questions) {
 		if (!Object.prototype.hasOwnProperty.call(room.questions, id)) {
 			continue;
 		}
-		if (id === 'FJ_0_0') {
+		if (!clueIdMatchesRound(id, isDJ)) {
 			continue;
 		}
 		if (room.playedClueIds.has(id)) {
@@ -166,7 +181,7 @@ function scheduleCategoryAutoPick(room) {
 			return;
 		}
 		applyQuestionSelection(room, qid);
-	}, 10000);
+	}, 12000);
 }
 
 function applyQuestionSelection(room, questionId) {
@@ -201,6 +216,7 @@ function applyQuestionSelection(room, questionId) {
 	room.curQuestionId = questionId;
 	room.playedClueIds.add(questionId);
 	console.log('Question:' + JSON.stringify(room.questions[questionId]));
+	emitPlayers(room.code, 'close category select');
 	emitGame(room.code, 'question reveal', {
 		question: room.questions[questionId]._question,
 		questionId: questionId,
@@ -524,7 +540,6 @@ gameSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
-		fs.appendFileSync(gameHistory, '\n' + r.gameId);
 		fs.appendFileSync(
 			gameHighScore,
 			'\n' + winningPlayerData.winningPlayerName + ',' + winningPlayerData.winningPlayerScore
@@ -692,31 +707,55 @@ gameSpc.on('connection', function (socket) {
 			return;
 		}
 		clearCategoryAutoPickTimer(r);
-		r.pendingGainedBoardOnCorrect = false;
-		r.pendingHostForcedNewGame = false;
-		r.newGameCounter = 0;
-		r.buzzerFlipped = false;
-		r.somecounter = 0;
-		r.gameData = [];
-		r.questions = {};
-		r.playedClueIds.clear();
-		r.finalJeopardyCheck = false;
-		r.finalJeopardyWageringPhase = false;
-		r.finalJeopardyAnswerPhase = false;
-		r.finalJeopardyBet = {};
-		r.isSecondRound = false;
-		r.roundTimer = ROUND_TIME;
-		r.lastPlayerBoardMarkup = '';
-		r.categorySelectOpen = false;
-		r.clueInProgress = false;
-		r.playerBuzzerUnlocked = false;
-		for (var player in r.players) {
-			r.players[player].score = 0;
-			r.players[player].givenAnswer = false;
-			r.players[player].isActive = false;
-		}
-		console.log(r.gameData);
-		setGameDataNew(r);
+		emitGame(r.code, 'host game load status', {
+			phase: 'loading',
+			message: 'Loading a new episode…',
+		});
+		selectGameForRoom(r, function (returnValue) {
+			if (!returnValue || returnValue.game == null) {
+				console.error('selectGameForRoom (new game board): no game row returned');
+				emitGame(r.code, 'host game load status', {
+					phase: 'error',
+					message:
+						'Could not load a new episode. Try again or change decade / episode type.',
+				});
+				return;
+			}
+			r.pendingGainedBoardOnCorrect = false;
+			r.pendingHostForcedNewGame = false;
+			r.newGameCounter = 0;
+			r.buzzerFlipped = false;
+			r.somecounter = 0;
+			r.gameData = [];
+			r.questions = {};
+			r.playedClueIds.clear();
+			r.finalJeopardyCheck = false;
+			r.finalJeopardyWageringPhase = false;
+			r.finalJeopardyAnswerPhase = false;
+			r.finalJeopardyBet = {};
+			r.isSecondRound = false;
+			r.roundTimer = ROUND_TIME;
+			r.lastPlayerBoardMarkup = '';
+			r.categorySelectOpen = false;
+			r.clueInProgress = false;
+			r.playerBuzzerUnlocked = false;
+			for (var player in r.players) {
+				r.players[player].score = 0;
+				r.players[player].givenAnswer = false;
+				r.players[player].isActive = false;
+			}
+			r.gameId = returnValue.game;
+			r.airdate = returnValue.airdate;
+			var tempDateNg = new Date(r.airdate);
+			r.airdate = formatPlayerOptionDate(tempDateNg);
+			appendPlayedGameIdToDisk(r.gameId);
+			console.log('NEW GAME BOARD GAME_ID: ' + r.gameId + ' AIRDATE ' + r.airdate);
+			emitGame(r.code, 'host game load status', {
+				phase: 'done',
+				message: '',
+			});
+			setGameDataNew(r);
+		});
 	});
 
 	socket.on('buzzer pressed confirmed', function (nameData) {
@@ -765,12 +804,35 @@ playerSpc.on('connection', function (socket) {
 				sendPlayerReconnectState(socket, name, room);
 				return;
 			}
-			var thirdPlayer = room.playerJoinOrder.length >= 3 ? room.playerJoinOrder[2] : null;
-			if (objectLength(room.players) === 3 && name === thirdPlayer && !room.hostGameOptionsSelected) {
-				socket.emit('option select new', name);
+			if (
+				objectLength(room.players) >= MIN_PLAYERS_TO_START &&
+				!room.hostGameOptionsSelected
+			) {
+				socket.emit('option select new');
+				socket.emit('game options vote progress', {
+					received: objectLength(room.optionVotes),
+					needed: objectLength(room.players),
+				});
 			} else {
 				socket.emit('wait for start game', name);
 			}
+			return;
+		}
+
+		if (room.gameState.active === true) {
+			socket.emit('player room error', {
+				message:
+					'This game has already started. Ask the host to start a new room.',
+			});
+			return;
+		}
+		if (objectLength(room.players) >= MAX_PLAYERS_PER_ROOM) {
+			socket.emit('player room error', {
+				message:
+					'This room already has the maximum of ' +
+					MAX_PLAYERS_PER_ROOM +
+					' players.',
+			});
 			return;
 		}
 
@@ -780,8 +842,20 @@ playerSpc.on('connection', function (socket) {
 		}
 		room.players[name] = new Player(name);
 		console.log(room.players);
-		if (objectLength(room.players) === 3) {
-			socket.emit('option select new', name);
+		var playerTotal = objectLength(room.players);
+		var voteProgressPayload = {
+			received: objectLength(room.optionVotes),
+			needed: playerTotal,
+		};
+		if (playerTotal === MIN_PLAYERS_TO_START) {
+			emitPlayers(room.code, 'option select new');
+		} else if (
+			playerTotal > MIN_PLAYERS_TO_START &&
+			!room.hostGameOptionsSelected
+		) {
+			socket.emit('option select new');
+			socket.emit('game options vote progress', voteProgressPayload);
+			emitPlayers(room.code, 'game options vote progress', voteProgressPayload);
 		} else {
 			socket.emit('wait for start game', name);
 		}
@@ -798,21 +872,70 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('option select new', function (optionArray) {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || r.hostGameOptionsSelected) {
 			return;
 		}
-		console.log(optionArray);
+		if (!socket.username) {
+			return;
+		}
+		if (!Array.isArray(optionArray) || optionArray.length < 3) {
+			return;
+		}
+		console.log('option vote', socket.username, optionArray);
+		r.optionVotes = r.optionVotes || {};
+		r.optionVotes[socket.username] = {
+			answerTime: normalizeOptionAnswerTime(optionArray[0]),
+			decade: normalizeOptionDecade(optionArray[1]),
+			episodeFilter: normalizeEpisodeFilterOption(optionArray[2]),
+		};
+		var needed = objectLength(r.players);
+		var received = objectLength(r.optionVotes);
+		emitPlayers(r.code, 'game options vote progress', {
+			received: received,
+			needed: needed,
+		});
+		if (received < needed) {
+			return;
+		}
+		r.answerTime =
+			tallyMajorityOrNull(r.optionVotes, 'answerTime') || '20';
+		r.decade = tallyMajorityOrNull(r.optionVotes, 'decade') || '20s';
+		r.episodeFilter =
+			tallyMajorityOrNull(r.optionVotes, 'episodeFilter') || 'any';
 		r.hostGameOptionsSelected = true;
-		r.answerTime = optionArray[0];
-		r.decade = optionArray[1];
-		emitPlayers(r.code, 'answer time data', r.answerTime);
-		emitGame(r.code, 'answer time data', r.answerTime);
-		selectByDecade(r.decade, function (returnValue) {
+		r.optionVotes = {};
+		emitPlayers(r.code, 'game setup loading');
+		emitGame(r.code, 'host game load status', {
+			phase: 'loading',
+			message: 'All votes in. Searching for a playable game…',
+		});
+		selectGameForRoom(r, function (returnValue) {
+			if (!returnValue || returnValue.game == null) {
+				console.error('selectGameForRoom: no game row returned');
+				r.hostGameOptionsSelected = false;
+				emitPlayers(r.code, 'game setup failed', {
+					message:
+						'No full game could be loaded. Try a different decade or set episode type to Any, or add more data to clues.db.',
+				});
+				emitGame(r.code, 'host game load status', {
+					phase: 'error',
+					message:
+						'No 61-clue game found. Try other votes or expand the database.',
+				});
+				return;
+			}
 			r.gameId = returnValue.game;
 			r.airdate = returnValue.airdate;
 			var tempDate = new Date(r.airdate);
 			r.airdate = formatPlayerOptionDate(tempDate);
+			appendPlayedGameIdToDisk(r.gameId);
 			console.log('GAME_ID: ' + r.gameId + ' AIRDATE ' + r.airdate);
+			emitGame(r.code, 'host game load status', {
+				phase: 'done',
+				message: '',
+			});
+			emitPlayers(r.code, 'answer time data', r.answerTime);
+			emitGame(r.code, 'answer time data', r.answerTime);
 			setGameDataNew(r);
 		});
 	});
@@ -835,7 +958,7 @@ playerSpc.on('connection', function (socket) {
 		}
 		console.log('NEW GAME COUNTER: ' + r.newGameCounter);
 		r.newGameCounter += 1;
-		if (r.newGameCounter == 3) {
+		if (r.newGameCounter >= objectLength(r.players)) {
 			emitGame(r.code, 'new game', r.gameData);
 		}
 	});
@@ -1022,9 +1145,7 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 			correct = result.correct;
 			if (result.source === 'openai') {
 				console.log(
-					'Answer judged by OpenAI: ' +
-						(correct ? 'correct' : 'incorrect') +
-						(result.aiReason ? ' — ' + result.aiReason : '')
+					'Answer judged by OpenAI: ' + (correct ? 'correct' : 'incorrect')
 				);
 			}
 
@@ -1414,7 +1535,7 @@ function checkIfAllPlayersAnswered(room) {
 		}
 	}
 
-	if (increment >= 3) {
+	if (increment >= objectLength(room.players)) {
 		return true;
 	}
 
@@ -1427,74 +1548,305 @@ function allPlayersNoAnswer(room) {
 	}
 }
 
-function selectByDecade(decade, callback){
-
-	var useDecade = 201;
-
-	switch(decade){
-		case "80s":
-			useDecade = 198;
-		break;
-		case "90s":
-			useDecade = 199;
-		break;
-		case "00s":
-			useDecade = 200;
-		break;
-		case "10s":
-			useDecade = 201;
-		break;
+function appendPlayedGameIdToDisk(gameId) {
+	if (gameId == null || gameId === '') {
+		return;
 	}
+	var idStr = String(gameId);
+	try {
+		var dir = path.dirname(gameHistory);
+		if (!fs.existsSync(dir)) {
+			fs.mkdirSync(dir, { recursive: true });
+		}
+		fs.appendFileSync(gameHistory, '\n' + idStr.replace(/\n/g, ''));
+	} catch (e) {
+		console.error('appendPlayedGameIdToDisk failed', e);
+	}
+}
 
+function readPlayedGameIdsFromDisk() {
+	try {
 		var gameHistorySend = fs.readFileSync(gameHistory, {
-  		encoding: 'binary'
-	});
-	// pass in the contents of a csv file
-	var parsedHistory = Baby.parse(gameHistorySend);
-// voila
-	var rowsHistory = parsedHistory.data;
-
-	var historyArray = new Array();
-	for (var rowY in rowsHistory)
-	{
-		historyArray.push(rowsHistory[rowY][0]);
+			encoding: 'binary',
+		});
+		var parsedHistory = Baby.parse(gameHistorySend);
+		var rowsHistory = parsedHistory.data;
+		var historyArray = [];
+		for (var rowY in rowsHistory) {
+			historyArray.push(rowsHistory[rowY][0]);
+		}
+		return historyArray.filter(function (id) {
+			return id != null && id !== '' && id !== 'undefined';
+		});
+	} catch (e) {
+		return [];
 	}
+}
 
-	var playedGameIds = historyArray.filter(function (id) {
-		return id != null && id !== '' && id !== 'undefined';
-	});
-	var notInClause = '';
-	if (playedGameIds.length > 0) {
-		notInClause =
-			' AND clues.game NOT IN ' + iterateThroughArraySQLite(playedGameIds);
+var VALID_OPTION_DECADES = {
+	'80s': true,
+	'90s': true,
+	'00s': true,
+	'10s': true,
+	'20s': true,
+};
+var VALID_OPTION_ANSWER_TIMES = { '15': true, '20': true, '30': true };
+var VALID_EPISODE_FILTERS = {
+	any: true,
+	kids: true,
+	teen: true,
+	college: true,
+	celebrity: true,
+	teacher: true,
+	champions: true,
+};
+
+function normalizeOptionDecade(d) {
+	var s = String(d || '').trim();
+	return VALID_OPTION_DECADES[s] ? s : '20s';
+}
+
+function normalizeOptionAnswerTime(t) {
+	var s = String(t || '').trim();
+	return VALID_OPTION_ANSWER_TIMES[s] ? s : '20';
+}
+
+function normalizeEpisodeFilterOption(f) {
+	var s = String(f || 'any').trim().toLowerCase();
+	return VALID_EPISODE_FILTERS[s] ? s : 'any';
+}
+
+/**
+ * Strict majority among counted votes: need floor(n/2)+1 for the same value.
+ * Returns that value, or null if no option reaches a majority (caller uses defaults).
+ */
+function tallyMajorityOrNull(votesByPlayer, field) {
+	var counts = {};
+	var n = 0;
+	var p;
+	for (p in votesByPlayer) {
+		if (!votesByPlayer.hasOwnProperty(p)) {
+			continue;
+		}
+		var row = votesByPlayer[p];
+		var v = row && row[field];
+		if (v === undefined || v === null || v === '') {
+			continue;
+		}
+		n++;
+		var key = String(v);
+		counts[key] = (counts[key] || 0) + 1;
 	}
+	if (n === 0) {
+		return null;
+	}
+	var need = Math.floor(n / 2) + 1;
+	var k;
+	for (k in counts) {
+		if (!counts.hasOwnProperty(k)) {
+			continue;
+		}
+		if (counts[k] >= need) {
+			return k;
+		}
+	}
+	return null;
+}
 
-	db.serialize(function() {
+function selectGameForRoom(room, callback) {
+	var playedGameIds = readPlayedGameIdsFromDisk();
+	function hostMsg(msg) {
+		emitGame(room.code, 'host game load status', {
+			phase: 'loading',
+			message: msg || '',
+		});
+	}
+	if (room.episodeFilter && room.episodeFilter !== 'any') {
+		hostMsg('Loading tournament episode from pack (if available)…');
+		jarchiveDynamic.selectPackEpisodeIntoDb(
+			db,
+			room.decade,
+			room.episodeFilter,
+			playedGameIds,
+			function (err, ret) {
+				if (err) {
+					console.warn(
+						'Dynamic j-archive pack episode failed, using local DB:',
+						err && err.message ? err.message : err
+					);
+				}
+				if (!ret) {
+					hostMsg('No pack match for that filter; searching local library…');
+					selectByDecadeWithFallbacks(
+						room.decade,
+						playedGameIds,
+						callback,
+						hostMsg
+					);
+					return;
+				}
+				hostMsg('Episode found. Building board…');
+				callback(ret);
+			}
+		);
+		return;
+	}
+	/** Episode type Any: only SQLite — unless 2020s, where local DB is usually empty. */
+	if (room.decade === '20s') {
+		var notIn20 = notInPlayedGamesSqlClause(playedGameIds);
+		hostMsg('Searching local library (2020s)…');
+		selectRandomFullGameRow('202', notIn20, function (local202) {
+			if (local202) {
+				console.log('THIS GAME ID: ' + local202.game);
+				callback(local202);
+				return;
+			}
+			hostMsg('No 2020s games in database; loading from episode pack…');
+			jarchiveDynamic.selectPackEpisodeIntoDb(
+				db,
+				'20s',
+				'any',
+				playedGameIds,
+				function (packErr, packRet) {
+					if (packErr) {
+						console.warn(
+							'Jeopardy pack (2020s / any) failed; using older decades from local DB:',
+							packErr && packErr.message ? packErr.message : packErr
+						);
+					} else if (!packRet) {
+						console.warn(
+							'Jeopardy pack had no usable 2020s episode; using older decades from local DB.'
+						);
+					}
+					if (packRet) {
+						console.log(
+							'Loaded 2020s episode from pack: game ' +
+								packRet.game +
+								', airdate ' +
+								packRet.airdate
+						);
+						hostMsg('2020s episode loaded. Building board…');
+						callback(packRet);
+						return;
+					}
+					hostMsg('Searching local library (1980s–2010s)…');
+					selectByAirYearPrefixList(
+						['198', '199', '200', '201'],
+						playedGameIds,
+						callback,
+						hostMsg
+					);
+				}
+			);
+		});
+		return;
+	}
+	hostMsg('Searching local library by decade…');
+	selectByDecadeWithFallbacks(room.decade, playedGameIds, callback, hostMsg);
+}
 
-		var queryThisGameId ="SELECT clues.game, airdate\n" +
-			"FROM clues\n" +
-			"JOIN airdates ON clues.game = airdates.game\n" +
-			"WHERE airdate LIKE '" + useDecade + "%'\n" +
-			notInClause + "\n" +
-			"GROUP BY clues.game\n" +
-			"HAVING count(id) == 61\n" +
-			"ORDER BY RANDOM() LIMIT 1";
+/** Airdate year prefixes to try: chosen decade first, then other eras. */
+function decadeAirYearPrefixOrder(decade) {
+	var map = {
+		'80s': '198',
+		'90s': '199',
+		'00s': '200',
+		'10s': '201',
+		'20s': '202',
+	};
+	var primary = map[decade] || '202';
+	var all = ['198', '199', '200', '201', '202'];
+	var ordered = [primary];
+	var i;
+	for (i = 0; i < all.length; i++) {
+		if (all[i] !== primary) {
+			ordered.push(all[i]);
+		}
+	}
+	return ordered;
+}
 
-			console.log(queryThisGameId);
+function notInPlayedGamesSqlClause(playedGameIds) {
+	if (!playedGameIds || playedGameIds.length === 0) {
+		return '';
+	}
+	var inner = iterateThroughArraySQLite(playedGameIds);
+	if (!inner || inner === '()') {
+		return '';
+	}
+	return ' AND clues.game NOT IN ' + inner;
+}
 
-	    db.all(queryThisGameId, function (err, rows) {
-    		if(err){
-		        console.log(err);
-		    }else{
-		    	if (!rows || !rows[0]) {
-		    		console.error('selectByDecade: no game row returned');
-		    		return;
-		    	}
-		        callback(rows[0]);
-		        console.log("THIS GAME ID: " + rows[0].game);
-		    }
-		  });
+/**
+ * Pick a random game with exactly 61 clues. If airYearPrefix3 is null, any airdate.
+ */
+function selectRandomFullGameRow(airYearPrefix3, notInClause, cb) {
+	var whereLine =
+		airYearPrefix3 != null
+			? "WHERE airdate LIKE '" + airYearPrefix3 + "%'\n"
+			: 'WHERE 1=1\n';
+	var queryThisGameId =
+		'SELECT clues.game, airdate\n' +
+		'FROM clues\n' +
+		'JOIN airdates ON clues.game = airdates.game\n' +
+		whereLine +
+		notInClause +
+		'\n' +
+		'GROUP BY clues.game\n' +
+		'HAVING count(id) == 61\n' +
+		'ORDER BY RANDOM() LIMIT 1';
+	console.log(queryThisGameId);
+	db.all(queryThisGameId, function (err, rows) {
+		if (err) {
+			console.log(err);
+			cb(null);
+			return;
+		}
+		if (!rows || !rows[0]) {
+			cb(null);
+			return;
+		}
+		cb(rows[0]);
 	});
+}
+
+function selectByAirYearPrefixList(prefixList, playedGameIds, callback, hostMsg) {
+	var notInClause = notInPlayedGamesSqlClause(playedGameIds);
+	var prefs = prefixList || [];
+	var idx = 0;
+	function tryNextPrefix() {
+		if (idx >= prefs.length) {
+			if (hostMsg) {
+				hostMsg('No full board in those decades; trying any available game…');
+			}
+			selectRandomFullGameRow(null, notInClause, function (row) {
+				if (row) {
+					console.log('Fallback any-decade game: ' + row.game);
+				}
+				callback(row || null);
+			});
+			return;
+		}
+		var prefix = prefs[idx++];
+		selectRandomFullGameRow(prefix, notInClause, function (row) {
+			if (row) {
+				console.log('THIS GAME ID: ' + row.game);
+				callback(row);
+			} else {
+				tryNextPrefix();
+			}
+		});
+	}
+	tryNextPrefix();
+}
+
+function selectByDecadeWithFallbacks(decade, playedGameIds, callback, hostMsg) {
+	selectByAirYearPrefixList(
+		decadeAirYearPrefixOrder(decade),
+		playedGameIds,
+		callback,
+		hostMsg
+	);
 }
 
 function iterateThroughArraySQLite(arrayIterate){
