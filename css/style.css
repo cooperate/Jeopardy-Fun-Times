@@ -1,9 +1,10 @@
 /* GAME BOARD */
-@import url(zain-fonts.css);
+@import url(korinna-fonts.css);
 
 body{
 	margin: 0 !important;
-	font-family: 'Zain', system-ui, -apple-system, sans-serif;
+	font-family: 'Korinna', sans-serif;
+	text-shadow: var(--jeopardy-text-shadow);
 }
 #game_container
 {
@@ -108,7 +109,7 @@ body{
 }
 
 .host-round-timer__label {
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-weight: 700;
 	font-size: 13px;
 	letter-spacing: 0.06em;
@@ -119,12 +120,12 @@ body{
 }
 
 .host-round-timer__value {
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-weight: 900;
 	font-size: 40px;
 	line-height: 1;
 	color: #ffea00;
-	text-shadow: 2px 2px 0 #000;
+	text-shadow: var(--jeopardy-text-shadow);
 }
 
 .host-round-timer.host-round-timer--low .host-round-timer__value {
@@ -145,7 +146,7 @@ body{
 #airdate_text{
 	display: flex;
 	color: white !important;
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-style: normal;
 	font-variant: normal;
 	font-weight: 500;
@@ -180,7 +181,7 @@ body{
 	text-align: center;
 	color: #ffea00;
 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0;/*#3f51b5;*/
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-weight: 900;
 	overflow: hidden;
 	word-break: break-word;
@@ -193,7 +194,16 @@ body{
 #game_board tr td,
 #tempGAME > table tr td {
 	font-size: 95px;
-	text-shadow: 2px 2px black;
+	text-shadow: var(--jeopardy-text-shadow);
+}
+
+/* Dollar cells: keep whole amounts on one line (avoid "100" / "0" on narrow viewports) */
+#game_board tr:not(:first-child) td,
+#tempGAME > table tr:not(:first-child) td {
+	word-break: normal;
+	overflow-wrap: normal;
+	hyphens: manual;
+	white-space: nowrap;
 }
 /*linear-gradient(#26A69A, #80CBC4 );*/
 
@@ -212,7 +222,7 @@ body{
 #tempGAME > table tr:first-child th {
 	position: relative;
 	color: white;
-	font-size: unset;
+	font-size: 0;
 	line-height: 0;
 	word-break: normal;
 	overflow-wrap: normal;
@@ -222,36 +232,56 @@ body{
 #game_board tr:first-child th .category-header-text,
 #tempGAME > table tr:first-child th .category-header-text {
 	position: absolute;
-	left: 4px;
-	right: 4px;
-	top: 4px;
-	bottom: 4px;
+	left: 12px;
+	right: 12px;
+	top: 12px;
+	bottom: 12px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	overflow: hidden;
 	box-sizing: border-box;
+	font-size: 1rem;
+	min-height: 0;
 }
 
 #game_board tr:first-child th .category-header-text__inner,
 #tempGAME > table tr:first-child th .category-header-text__inner {
-	width: 100%;
+	/*
+	  Shrink-wrap to the text (like on-air Jeopardy): short titles grow until they hit
+	  an edge. width:100% block made scrollWidth === cell width so JS could only
+	  constrain by height and titles stayed tiny.
+	*/
+	display: inline-block;
 	max-width: 100%;
+	max-height: 100%;
 	min-width: 0;
+	vertical-align: middle;
 	box-sizing: border-box;
-	line-height: 1.08;
+	line-height: 1.06;
 	text-align: center;
-	font-size: 56px;
+	font-size: 50px;
 	font-weight: 900;
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	word-break: normal;
-	overflow-wrap: normal;
+	overflow-wrap: break-word;
 	hyphens: none;
 	white-space: normal;
+	overflow: hidden;
+	text-shadow: var(--jeopardy-text-shadow);
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+}
+
+@supports (text-wrap: balance) {
+	#game_board tr:first-child th .category-header-text__inner,
+	#tempGAME > table tr:first-child th .category-header-text__inner {
+		text-wrap: balance;
+	}
 }
 
 #players_table{
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-weight: 700;
 	text-align: center;
 	font-size:14px;
@@ -276,6 +306,11 @@ body{
 	color:white;
 	height:80px;
 	font-size: 70px;
+}
+
+/* WAITING / ACTIVE — no heavy shadow (inherits body --jeopardy-text-shadow otherwise) */
+#players_table tr[id^="active_indicator_"] td {
+	text-shadow: none;
 }
 
 /* quesiton field  for client player screen*/
@@ -320,7 +355,7 @@ body{
 }
 
 #question_field h2{
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-style: normal;
 	font-variant: normal;
 	font-weight: 500;
@@ -350,7 +385,7 @@ body{
 
 
 #message_overlay li{
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-style: normal;
 	font-variant: normal;
 	font-weight: 500;
@@ -395,15 +430,43 @@ body{
 
 .player_answer_row {
 	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	justify-content: flex-start;
+	gap: 12px;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.player_answer_form {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	box-sizing: border-box;
+	gap: 12px;
+}
+
+.player_answer_input_row {
+	width: 100%;
+	min-width: 0;
+	box-sizing: border-box;
+}
+
+.player_answer_actions {
+	display: flex;
 	flex-wrap: wrap;
+	flex-direction: row;
 	align-items: center;
 	justify-content: center;
 	gap: 12px;
 	width: 100%;
+	box-sizing: border-box;
 }
 
 .player_answer_row #answer_submit {
-	flex: 1 1 280px;
+	width: 100%;
 	min-width: 0;
 }
 
@@ -448,7 +511,7 @@ body{
  }
 
 #message_overlay h2{
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-size: 3em;
 	font-variant: normal;
 	font-weight: 800;
@@ -456,6 +519,10 @@ body{
 	padding-right:15%;
 	text-align:center;
 	color: white;
+}
+
+.player_field #message_overlay h2 {
+	text-shadow: none;
 }
 
 
@@ -475,7 +542,7 @@ body{
 	color: #ffffcc;
 	clear:left;
 	clear:right;
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 }
 
 
@@ -496,7 +563,7 @@ body{
 	width: inherit;
 	height: inherit;
 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /*#3f51b5;*/
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-weight: 800;
 	text-align:center;
 	box-sizing: border-box;
@@ -533,18 +600,18 @@ body{
 	width: inherit;
 	height: inherit;
 	background: #2980b9 url(https://static.tumblr.com/03fbbc566b081016810402488936fbae/pqpk3dn/MRSmlzpj3/tumblr_static_bg3.png) repeat 0 0; /* #3f51b5;*/
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-weight: 800;
 }
 .player_type{
 	position: absolute;
     right: -50px;
-    height: 33.333%;
+    height: 20%;
     width: 50px;
     border-radius: 25px 0px 0px 25px;
 	background-color:#FFA726;
 	font-size: 20px;
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-weight: 700;
 	display: flex;
     justify-content: center;
@@ -566,11 +633,21 @@ body{
 }
 #player_typing_1
 {
-	top:33.333%;
+	top:20%;
 	z-index: 2;
 }
 #player_typing_2{
-	top:66.666%;
+	top:40%;
+	z-index: 2;
+}
+#player_typing_3
+{
+	top:60%;
+	z-index: 2;
+}
+#player_typing_4
+{
+	top:80%;
 	z-index: 2;
 }
 .progress{
@@ -723,7 +800,7 @@ body{
 
 .player_question #question_revealed {
 	margin: 0;
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-variant: normal;
 	font-weight: 800;
 	color: white;
@@ -740,7 +817,7 @@ body{
 }
 
 #player_score, #player_name{
-	font-family: 'Zain', sans-serif;
+	font-family: 'Korinna', sans-serif;
 	font-size: 35px;
 	font-variant: normal;
 	font-weight: 800;
@@ -777,12 +854,26 @@ body{
     -moz-border-radius: 2px;
     -moz-box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075);
     background: #DFDFDF;
+    box-sizing: border-box;
+}
+
+.player_answer_field #answer_field {
+	width: 100%;
+	max-width: 100%;
+	margin-right: 0;
+	margin-bottom: 0;
 }
 
 #answer_submit, #bet_submit
 {
 	text-align:center;
 }
+
+#answer_submit #answer_btn {
+	width: auto;
+	min-width: min(100%, 12rem);
+}
+
 #answer_submit button, #bet_btn
 {
 	font-size: 60px;
@@ -793,7 +884,7 @@ body{
     border-radius: 4px;
     -moz-border-radius: 4px;
     -webkit-border-radius: 4px;
-    text-shadow: 1px 1px 1px #FFE477;
+    text-shadow: none;
     font-weight: bold;
     box-shadow: 1px 1px 1px #3D3D3D;
     -webkit-box-shadow:1px 1px 1px #3D3D3D;
@@ -830,8 +921,13 @@ body{
 		font-size: 35px;
 	}
 
-	#game_board tr th,
-	#tempGAME tr th {
+	#game_board tr:not(:first-child) td,
+	#tempGAME tr:not(:first-child) td {
+		font-size: clamp(14px, 2.6vw, 28px);
+	}
+
+	#game_board tr:not(:first-child) th,
+	#tempGAME tr:not(:first-child) th {
 		color: white;
 		font-size: 24px;
 	}
@@ -851,13 +947,8 @@ body{
 @media only screen and (max-width: 767px), only screen and (max-device-width: 767px) {
 	#game_board tr:not(:first-child) td,
 	#tempGAME tr:not(:first-child) td {
-		font-size: 25px;
+		font-size: clamp(12px, 3.4vw, 18px);
 	}
-	#game_board tr:first-child th,
-	#tempGAME tr:first-child th {
-		font-size: 1em;
-	}
-
 	#answer_field
 	{
 		font-size: 30px;
@@ -884,13 +975,9 @@ body{
 }
 
 @media only screen and (max-width: 320px), only screen and (max-device-width: 320px) {
-	#game_board tr:first-child th,
-	#tempGAME tr:first-child th {
-		font-size: 0.7em;
-	}
 	#game_board tr:not(:first-child) td,
 	#tempGAME tr:not(:first-child) td {
-		font-size: 20px;
+		font-size: clamp(11px, 3.2vw, 16px);
 	}
 }
 

@@ -21,6 +21,7 @@
      <span class="host-player-roster__label">Joined</span>
      <span id="host_player_roster_names" class="host-player-roster__names">None yet — players use <code>/home</code> or <code>/player?room=</code> with this code.</span>
    </div>
+   <div id="host_game_load_status" class="host-game-load-status host-game-load-status--hidden" role="status" aria-live="polite"></div>
    <div id="host_ai_judging" class="host-ai-judging host-ai-judging--hidden" aria-live="polite" aria-hidden="true" role="status">
      <div class="host-ai-judging__inner">
        <span class="host-ai-judging__label">Checking answer with AI…</span>
@@ -64,6 +65,14 @@
             <h2> PLAYER ANSWERING...</h2>
             <div class="progress"></div>
           </div>
+          <div class="player_type" id="player_typing_3">
+            <h2> PLAYER ANSWERING...</h2>
+            <div class="progress"></div>
+          </div>
+          <div class="player_type" id="player_typing_4">
+            <h2> PLAYER ANSWERING...</h2>
+            <div class="progress"></div>
+          </div>
           <div id="daily_double_icon">
             <h2>DAILY DOUBLE</h2>
           </div>
@@ -89,6 +98,8 @@
           <div class="player_display" id="player_0"><div class="secure_player_container"></div></div>
          <div class="player_display" id="player_1"><div class="secure_player_container"></div></div>
          <div class="player_display" id="player_2"><div class="secure_player_container"></div></div>
+         <div class="player_display" id="player_3"><div class="secure_player_container"></div></div>
+         <div class="player_display" id="player_4"><div class="secure_player_container"></div></div>
       </div>
     </div>
     <div id="airdate_screen">
@@ -102,6 +113,8 @@
         <div class = "player_name_bubble" id="player_name_bubble_1"></div>
         <div class = "player_name_bubble" id="player_name_bubble_2"></div> 
         <div class = "player_name_bubble" id="player_name_bubble_3"></div>
+        <div class = "player_name_bubble" id="player_name_bubble_4"></div>
+        <div class = "player_name_bubble" id="player_name_bubble_5"></div>
       </div>
     </div>
     <script src="/socket.io/socket.io.js"></script>

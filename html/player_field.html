@@ -15,37 +15,38 @@
 </head>
 <body>
 	<div class="game_options">
-	  <h2>Select Answer Time</h2>
-	  <p>
-   	 <input type="radio" id="time_1" name="radio-group-time-option" checked>
-	    <label for="time_1">15</label>
+	  <h2 id="vote_heading_time">Vote: answer time</h2>
+	  <p class="game_options__field">
+	    <select id="vote_select_time" class="game_options__select" aria-labelledby="vote_heading_time">
+	      <option value="15">15 seconds</option>
+	      <option value="20" selected>20 seconds</option>
+	      <option value="30">30 seconds</option>
+	    </select>
 	  </p>
-	  <p>
-	    <input type="radio" id="time_2" name="radio-group-time-option">
-	    <label for="time_2">20</label>
+	  <h2 id="vote_heading_decade">Vote: decade</h2>
+	  <p class="game_options__field">
+	    <select id="vote_select_decade" class="game_options__select" aria-labelledby="vote_heading_decade">
+	      <option value="80s">1980s</option>
+	      <option value="90s">1990s</option>
+	      <option value="00s">2000s</option>
+	      <option value="10s">2010s</option>
+	      <option value="20s" selected>2020s</option>
+	    </select>
 	  </p>
-	  <p>
-	    <input type="radio" id="time_3" name="radio-group-time-option">
-	    <label for="time_3">30</label>
+	  <h2 id="vote_heading_episode">Vote: episode type</h2>
+	  <p class="game_options__field">
+	    <select id="vote_select_episode" class="game_options__select" aria-labelledby="vote_heading_episode">
+	      <option value="any" selected>Any</option>
+	      <option value="kids">Kids Week</option>
+	      <option value="teen">Teen Tournament</option>
+	      <option value="college">College Championship</option>
+	      <option value="celebrity">Celebrity Jeopardy</option>
+	      <option value="teacher">Teachers Tournament</option>
+	      <option value="champions">Tournament of Champions</option>
+	    </select>
 	  </p>
-	  <h2>Select the Decade</h2>
-	  <p>
-   	 	<input type="radio" id="decade_1" name="radio-group-decade-option" checked>
-	    <label for="decade_1">80's</label>
-	  </p>
-	  <p>
-	    <input type="radio" id="decade_2" name="radio-group-decade-option">
-	    <label for="decade_2">90's</label>
-	  </p>
-	  <p>
-	    <input type="radio" id="decade_3" name="radio-group-decade-option">
-	    <label for="decade_3">2000's</label>
-	  </p>
-	  <p>
-	    <input type="radio" id="decade_4" name="radio-group-decade-option">
-	    <label for="decade_4">2010's</label>
-	  </p>
-	  <button class="fancy_button bg-gradient1" id="options_accept">OK</button>
+	  <p id="vote_feedback" class="game_options__feedback" role="status" aria-live="polite" hidden></p>
+	  <button type="button" class="fancy_button bg-gradient1" id="options_accept">OK</button>
 	</div>
 	<div class="restart">
 		<form id="restart_game" action="">
@@ -81,12 +82,17 @@
 			</div>
 			<div class = "player_answer_field">
 				<div class="player_answer_row">
-					<form id="answer_submit" action="">
-						<input id="answer_field" autocomplete="off" placeholder="What is..."/><button type="submit" id="answer_btn">Submit</button>
+					<form id="answer_submit" class="player_answer_form" action="">
+						<div class="player_answer_input_row">
+							<input id="answer_field" autocomplete="off" placeholder="What is..."/>
+						</div>
+						<div class="player_answer_actions">
+							<button type="submit" id="answer_btn">Submit</button>
+							<button type="button" id="start_button" class="mic_button" aria-label="Dictate answer with microphone" title="Dictate answer (uses your device microphone)">
+								<img id="start_img" src="/game-media/images/mic.gif" alt="">
+							</button>
+						</div>
 					</form>
-					<button type="button" id="start_button" class="mic_button" aria-label="Dictate answer with microphone" title="Dictate answer (uses your device microphone)">
-						<img id="start_img" src="/game-media/images/mic.gif" alt="">
-					</button>
 				</div>
 				<p id="mic_unsupported" class="mic_unsupported" hidden>Speech recognition is not supported in this browser. Type your answer instead.</p>
 			</div>
