@@ -382,6 +382,7 @@ function buildHostSnapshot(room) {
 			_questionId: q._questionId,
 			_mediaLink: q._mediaLink,
 			_mediaType: q._mediaType,
+			_mediaOriginalUrl: q._mediaOriginalUrl || '',
 			_round: q._round,
 		};
 	}
@@ -428,30 +429,58 @@ function checkForFullGame(){
 }
 
 /*DOWNLOAD REQUIRED IMAGES (native fetch; no request package)*/
+function mediaFilenameFromUrl(mediaLink) {
+	var clean = String(mediaLink || '').split('?')[0];
+	if (!clean) {
+		return '';
+	}
+	if (clean.indexOf('/media/') !== -1) {
+		return clean.split('/media/').pop() || '';
+	}
+	var base = path.basename(clean);
+	return base && base !== '/' && base !== '.' ? base : '';
+}
+
 function download(uri, filename, callback, type) {
-	var destDir = path.join(__dirname, 'temp-media', type);
+	var destDir = path.join(__dirname, 'temp-media', type || 'none');
 	console.log('DOWNLOAD: ' + filename);
 	console.log('TYPE: ' + type);
 	console.log('URI: ' + uri);
 	fs.mkdirSync(destDir, { recursive: true });
 	var destPath = path.join(destDir, filename);
-	fetch(uri)
-		.then(function (res) {
-			if (!res.ok) {
-				throw new Error('HTTP ' + res.status + ' ' + res.statusText);
-			}
-			console.log('content-type:', res.headers.get('content-type'));
-			console.log('content-length:', res.headers.get('content-length'));
-			return res.arrayBuffer();
-		})
-		.then(function (buf) {
-			fs.writeFileSync(destPath, Buffer.from(buf));
-			callback();
-		})
-		.catch(function (err) {
-			console.error('DOWNLOAD failed:', uri, err.message || err);
-			callback();
-		});
+	var urlsToTry = [uri];
+	if (/^http:\/\//i.test(uri)) {
+		urlsToTry.push(uri.replace(/^http:\/\//i, 'https://'));
+	}
+	function tryNext(i) {
+		if (i >= urlsToTry.length) {
+			console.error('DOWNLOAD failed for all URL variants:', uri);
+			callback(false);
+			return;
+		}
+		fetch(urlsToTry[i])
+			.then(function (res) {
+				if (!res.ok) {
+					throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+				}
+				console.log('content-type:', res.headers.get('content-type'));
+				console.log('content-length:', res.headers.get('content-length'));
+				return res.arrayBuffer();
+			})
+			.then(function (buf) {
+				fs.writeFileSync(destPath, Buffer.from(buf));
+				callback(true);
+			})
+			.catch(function (err) {
+				console.error(
+					'DOWNLOAD failed:',
+					urlsToTry[i],
+					err.message || err
+				);
+				tryNext(i + 1);
+			});
+	}
+	tryNext(0);
 }
 
 playerSelect.on('connection', function(socket){
@@ -1564,43 +1593,82 @@ function setGameDataNew(room) {
 
 function downloadImages(room) {
 	for (var question in room.questions) {
-		var mediaLink = room.questions[question].mediaLink;
-		mediaLink = mediaLink.trim();
+		var q = room.questions[question];
+		var mediaLink = String(q.mediaLink || '').trim();
 		console.log('MEDIA LINK on question loop: /' + mediaLink + '/');
-		if (mediaLink) {
-			var url_img_name = mediaLink;
-			url_img_name = url_img_name.split('/media/');
-			var filePath =
-				'/temp-media/' + room.questions[question].mediaType + '/' + url_img_name[1];
-			if (false) {
-				console.log("doesn't need download");
-				room.questions[question].mediaLink = filePath;
-				emitGame(room.code, 'game data', {
-					questionID: room.questions[question].questionId,
-					question: room.questions[question],
-				});
-			} else {
-				console.log(room.questions[question]);
-				(function (_question, _filePath, _url_img_name, r) {
-					console.log('QUESTION inside fs check ' + _question);
-					console.log('URL_IMG_NAME ' + _url_img_name);
-					console.log('FILE PATH ' + _filePath);
-					download(_question.mediaLink, _url_img_name, function () {
-						console.log('done download');
-						_question.mediaLink = _filePath;
-						emitGame(r.code, 'game data', {
-							questionID: _question.questionId,
-							question: _question,
-						});
-					}, _question.mediaType);
-				})(room.questions[question], filePath, url_img_name[1], room);
-			}
-		} else {
+		if (!mediaLink) {
 			emitGame(room.code, 'game data', {
-				questionID: room.questions[question].questionId,
-				question: room.questions[question],
+				questionID: q.questionId,
+				question: q,
 			});
+			continue;
 		}
+
+		var mediaType = q.mediaType;
+		if (!mediaType || mediaType === 'none') {
+			mediaType = parseMediaType(mediaLink);
+			if (mediaType === 'none' && /^https?:\/\//i.test(mediaLink)) {
+				mediaType = 'image';
+			}
+			q.mediaType = mediaType;
+		}
+
+		var filename = mediaFilenameFromUrl(mediaLink);
+		if (!filename || filename === 'undefined') {
+			q._mediaOriginalUrl = mediaLink;
+			emitGame(room.code, 'game data', {
+				questionID: q.questionId,
+				question: q,
+			});
+			continue;
+		}
+
+		var destPath = path.join(__dirname, 'temp-media', mediaType, filename);
+		var filePath = '/temp-media/' + mediaType + '/' + filename;
+		var originalUrl = mediaLink;
+		q._mediaOriginalUrl = originalUrl;
+
+		var alreadyHave = false;
+		try {
+			alreadyHave = fs.existsSync(destPath) && fs.statSync(destPath).size > 0;
+		} catch (e) {
+			alreadyHave = false;
+		}
+
+		if (alreadyHave) {
+			console.log("doesn't need download: " + filePath);
+			q.mediaLink = filePath;
+			emitGame(room.code, 'game data', {
+				questionID: q.questionId,
+				question: q,
+			});
+			continue;
+		}
+
+		(function (_question, _filePath, _filename, _originalUrl, _mediaType, r) {
+			console.log('QUESTION inside fs check ' + _question.questionId);
+			console.log('URL_IMG_NAME ' + _filename);
+			console.log('FILE PATH ' + _filePath);
+			download(
+				_originalUrl,
+				_filename,
+				function (ok) {
+					console.log('done download ok=' + ok);
+					if (ok) {
+						_question.mediaLink = _filePath;
+					} else {
+						/* Keep remote URL so the host can still try loading it */
+						_question.mediaLink = _originalUrl;
+					}
+					_question._mediaOriginalUrl = _originalUrl;
+					emitGame(r.code, 'game data', {
+						questionID: _question.questionId,
+						question: _question,
+					});
+				},
+				_mediaType
+			);
+		})(q, filePath, filename, originalUrl, mediaType, room);
 	}
 }
 

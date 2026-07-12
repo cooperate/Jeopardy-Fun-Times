@@ -546,6 +546,8 @@ $(document).ready(function() {
 		}
 	    questionList[data.questionID] = new Question(data.question._category, data.question._value, data.question._question, data.question._answer, data.question._dailyDouble, data.question._questionId, data.question._mediaLink, data.question._round);
 	    questionList[data.questionID].mediaType = data.question._mediaType;
+	    questionList[data.questionID]._mediaOriginalUrl =
+	    	data.question._mediaOriginalUrl || '';
 	    console.log("QUESTION LIST LENGTH: " + Object.keys(questionList).length);
 	    if (Object.keys(questionList).length == 61){
 	    	startGame();
@@ -775,6 +777,7 @@ $(document).ready(function() {
 				q._round
 			);
 			questionList[qid].mediaType = q._mediaType;
+			questionList[qid]._mediaOriginalUrl = q._mediaOriginalUrl || '';
 		}
 		rebuildHostPlayersTableFromSnapshot(snapshot);
 
@@ -2038,67 +2041,109 @@ $(document).ready(function() {
 		//$("#player_timer_text").html("Time Remaining:" + 15);
 	}
 
-	//attempt to display media if it exists in image
-	//TODO include google image search if original database fails, or just replace!
+	// Display clue media from downloaded /temp-media (or remote URL fallback).
 	function searchForMedia(questionId)
 	{
-		$("#question_field #image_container").html('');
-		console.log("Searching for Media on " + JSON.stringify(questionList[questionId]));
-		var mediaLink = questionList[questionId].mediaLink;
-		console.log("MEDIA LINK: "  + mediaLink);
-		if (mediaLink != 'no url')
-		{
-			switch(questionList[questionId].mediaType)
-			{
-				case "image":
-					getImageGoogle(questionList[questionId].answer);
-					//$("#question_field #image_container").html("<img id='question_image' alt='no image available' src=" + mediaLink + ">");
-					break;
-				case "video":
-					getImageGoogle(questionList[questionId].answer);
-					break;
-				case "video_mp4":
-					getImageGoogle(questionList[questionId].answer);
-					break;
-				case "video_wmv":
-					getImageGoogle(questionList[questionId].answer);
-					break;
-				case "audio":
-					getImageGoogle(questionList[questionId].answer);
-					break;
-					/*var audioClip = new Audio();
-			        audioClip.src = mediaLink;
-			        audioClip.addEventListener('load', function () {
-			        	//musicAnimate();
-			            audioClip.play();
-			        });*/
-				default:
-			}
+		var $container = $("#question_field #image_container");
+		$container.empty();
+		var q = questionList[questionId];
+		if (!q) {
+			return;
+		}
+		var mediaLink = String(q.mediaLink || '').trim();
+		var mediaType = q.mediaType || 'none';
+		var originalUrl = String(q._mediaOriginalUrl || '').trim();
+		console.log("MEDIA LINK: " + mediaLink + " type=" + mediaType);
+
+		if (!mediaLink || mediaLink === 'no url') {
+			return;
+		}
+
+		if (
+			mediaType === 'image' ||
+			(mediaType === 'none' && /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(mediaLink))
+		) {
+			showQuestionImage(mediaLink, originalUrl);
+			return;
+		}
+
+		if (mediaType === 'audio') {
+			playQuestionAudio(mediaLink, originalUrl);
+			return;
+		}
+
+		if (mediaType === 'video_mp4') {
+			showQuestionVideo(mediaLink, originalUrl);
+			return;
+		}
+
+		if (mediaType === 'video_wmv' || mediaType === 'video') {
+			/* WMV rarely plays in-browser; still try local/remote as <video>, else image fallback */
+			showQuestionVideo(mediaLink, originalUrl);
 		}
 	}
 
-	//use google api to match the first search result from an answer
-	//disabled this, not sharing api key!
-	function getImageGoogle(questionAnswer){
-		var cx = "016302290608621917336:pnx9tnn9lwa";
-		var key = "***REMOVED***";
-		var searchType = "image";
-		var num = 1;
-		var searchURL = "https://www.googleapis.com/customsearch/v1?key=" + key + "&cx=" + cx + "&q=" + questionAnswer + "&num=" + num + "&searchType=" + searchType;
-		console.log("GOOGLE URL: " + searchURL);
-		$.getJSON( searchURL ).then(function( data ) {
-			console.log(data);
-			console.log("LINK TO GOOGLE IMAGE: " + data.items[0].link);
-			$("#question_field #image_container").html("<img id='question_image' alt='no image available' src=" + data.items[0].link + ">");
+	function showQuestionImage(primaryUrl, fallbackUrl) {
+		var $container = $("#question_field #image_container");
+		var $img = $('<img>', {
+			id: 'question_image',
+			alt: 'Clue media',
 		});
+		var triedFallback = false;
+		$img.on('error', function () {
+			if (!triedFallback && fallbackUrl && fallbackUrl !== primaryUrl) {
+				triedFallback = true;
+				$img.attr('src', fallbackUrl);
+				return;
+			}
+			$img.remove();
+		});
+		$img.attr('src', primaryUrl);
+		$container.append($img);
+	}
+
+	function playQuestionAudio(primaryUrl, fallbackUrl) {
+		var audioClip = new Audio();
+		var src = primaryUrl;
+		audioClip.addEventListener('error', function () {
+			if (fallbackUrl && fallbackUrl !== src) {
+				src = fallbackUrl;
+				audioClip.src = fallbackUrl;
+				audioClip.play().catch(function () { /* ignore */ });
+			}
+		});
+		audioClip.src = primaryUrl;
+		audioClip.play().catch(function () { /* autoplay / missing file */ });
+	}
+
+	function showQuestionVideo(primaryUrl, fallbackUrl) {
+		var $container = $("#question_field #image_container");
+		var $video = $('<video>', {
+			id: 'question_image',
+			controls: true,
+			autoplay: true,
+			muted: true,
+			playsinline: true,
+		});
+		$video.css({ maxWidth: '100%', maxHeight: '350px' });
+		var triedFallback = false;
+		$video.on('error', function () {
+			if (!triedFallback && fallbackUrl && fallbackUrl !== primaryUrl) {
+				triedFallback = true;
+				$video.attr('src', fallbackUrl);
+				return;
+			}
+			$video.remove();
+			if (fallbackUrl || primaryUrl) {
+				showQuestionImage(fallbackUrl || primaryUrl, '');
+			}
+		});
+		$video.attr('src', primaryUrl);
+		$container.append($video);
 	}
 
 	function musicAnimate(audioClip){
-		/*var clipLength = audioClip.duration;
-		var musicInterval = setInterval(function(){
-			var currentTime = audioClip.currentTime;
-			var percentComplete = currentTime/clipLength;
-		}, 500);*/
+		/* unused */
 	}
 
 	//EFFECTS
