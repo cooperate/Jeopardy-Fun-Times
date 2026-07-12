@@ -181,10 +181,13 @@ $(document).ready(function() {
 				fjBetRecorded !== undefined &&
 				fjBetRecorded !== null &&
 				fjBetRecorded !== '';
+			var allWagersIn = !!state['final-jeopardy-all-wagers-in'];
 			if (hasBet) {
 				$('.player_bet_field').css('display', 'none');
 				postScreenMessage(
-					'You wagered ' + fjBetRecorded + '. Waiting for other players.',
+					allWagersIn
+						? 'All wagers are in — watch the screen.'
+						: 'You wagered ' + fjBetRecorded + '. Waiting for other players.',
 					false,
 					0
 				);
@@ -657,12 +660,9 @@ $(document).ready(function() {
 	   		switchBuzzer(true);
 	   		if (!finalJeopardyAnswered){
 	   			socket.emit('player no answer final jeopardy', playerName);
+	   			postScreenMessage('Time is up — watch the screen for the results.', false, 0);
 	   		} else {
-	   			postScreenMessage(
-	   				'Your Final Jeopardy score: $' + playerScore + '. Watch the results on screen.',
-	   				false,
-	   				0
-	   			);
+	   			postScreenMessage('Watch the screen for the results.', false, 0);
 	   		}
 	   });
 
@@ -917,7 +917,7 @@ $(document).ready(function() {
 		        console.log(finalJeopardyCheck);
 		        if(finalJeopardyCheck)
 		        {
-		        	postScreenMessage("Please look at the screen.", false, 0);
+		        	postScreenMessage("Answer locked in — watch the screen.", false, 0);
 		        }
 			}
 			$("#answer_field").blur();
@@ -956,14 +956,12 @@ $(document).ready(function() {
 
 	 	if (playerName == score.playerName)
 	 	{
+	 		/* Final Jeopardy: keep the result secret until the host reveal announces it. */
+	 		if (score.finalJeopardy) {
+	 			return;
+	 		}
 	 		$('#player_score').html(score.score);
 	 		playerScore= score.score;
-	 		if (score.finalJeopardy) {
-	 			var fjMsg = score.correct
-	 				? 'Correct! Your score is now $' + score.score + '.'
-	 				: 'Incorrect. Your score is now $' + score.score + '.';
-	 			postScreenMessage(fjMsg, false, 0);
-	 		}
 	 	}
 	 	if (!finalJeopardyCheck)
 	 	{
@@ -986,6 +984,26 @@ $(document).ready(function() {
 		 		}
 		 	}
 	 	}
+	 });
+
+	 socket.on('final jeopardy reveal player', function(data){
+	 	if (!data || data.playerName !== playerName) {
+	 		return;
+	 	}
+	 	playerScore = parseInt(data.score, 10);
+	 	if (isNaN(playerScore)) {
+	 		playerScore = 0;
+	 	}
+	 	$('#player_score').html(playerScore);
+	 	var msg = data.correct
+	 		? 'Correct! Your score is now $' + playerScore + '.'
+	 		: 'Incorrect. Your score is now $' + playerScore + '.';
+	 	postScreenMessage(msg, false, 0);
+	 });
+
+	 socket.on('final jeopardy all wagers ready', function(){
+	 	$('.player_bet_field').css('display', 'none');
+	 	postScreenMessage('All wagers are in — watch the screen.', false, 0);
 	 });
 
 	 socket.on('final jeopardy started', function(){
@@ -1199,7 +1217,7 @@ $(document).ready(function() {
 	 	if(finalJeopardyCheck && validationObject.isValid && value != '')
 	 	{
 	 		$(".player_bet_field").fadeOut();
-	 		postScreenMessage("Please look at the screen.", false, 0);
+	 		postScreenMessage("You wagered $" + value + ". Waiting for other players.", false, 0);
 	 	}
 
 	 	$("#bet_field").blur();

@@ -66,6 +66,47 @@ function allPlayersHaveFinalJeopardyBet(room) {
 	return Object.keys(room.players).length > 0;
 }
 
+function collectFinalJeopardyBetsPayload(room) {
+	var bets = [];
+	var playerName;
+	for (playerName in room.finalJeopardyBet) {
+		if (!Object.prototype.hasOwnProperty.call(room.finalJeopardyBet, playerName)) {
+			continue;
+		}
+		bets.push({
+			playerName: playerName,
+			bet: room.finalJeopardyBet[playerName].bet,
+		});
+	}
+	return bets;
+}
+
+function maybeEmitAllFinalJeopardyWagersReady(room, force) {
+	if (!room.finalJeopardyWageringPhase || room.finalJeopardyAnswerPhase) {
+		return false;
+	}
+	if (!allPlayersHaveFinalJeopardyBet(room)) {
+		return false;
+	}
+	if (room.finalJeopardyAllWagersEmitted && !force) {
+		return false;
+	}
+	room.finalJeopardyAllWagersEmitted = true;
+	clearFinalJeopardyWagerTimer(room);
+	var bets = collectFinalJeopardyBetsPayload(room);
+	emitGame(room.code, 'final jeopardy all wagers ready', { bets: bets });
+	emitPlayers(room.code, 'final jeopardy all wagers ready');
+	return true;
+}
+
+function syncFinalJeopardyWagersToHost(room) {
+	var bets = collectFinalJeopardyBetsPayload(room);
+	if (bets.length) {
+		emitGame(room.code, 'final jeopardy wagers sync', { bets: bets });
+	}
+	maybeEmitAllFinalJeopardyWagersReady(room, true);
+}
+
 function defaultMissingFinalJeopardyWagers(room) {
 	room.finalJeopardyWagerTimer = null;
 	if (!room.finalJeopardyWageringPhase || room.finalJeopardyAnswerPhase) {
@@ -90,6 +131,7 @@ function defaultMissingFinalJeopardyWagers(room) {
 	if (missing) {
 		emitPlayers(room.code, 'final jeopardy wager timed out');
 	}
+	maybeEmitAllFinalJeopardyWagersReady(room, true);
 }
 
 const app = express();
@@ -463,6 +505,7 @@ gameSpc.on('connection', function (socket) {
 		r.newGameCounter = 0;
 		r.finalJeopardyWageringPhase = false;
 		r.finalJeopardyAnswerPhase = false;
+		r.finalJeopardyAllWagersEmitted = false;
 		clearFinalJeopardyWagerTimer(r);
 		emitPlayers(r.code, 'new game');
 		emitGame(r.code, 'new game', r.gameData);
@@ -595,6 +638,7 @@ gameSpc.on('connection', function (socket) {
 		}
 		r.finalJeopardyWageringPhase = true;
 		r.finalJeopardyAnswerPhase = false;
+		r.finalJeopardyAllWagersEmitted = false;
 		clearFinalJeopardyWagerTimer(r);
 		r.finalJeopardyWagerTimer = setTimeout(function () {
 			defaultMissingFinalJeopardyWagers(r);
@@ -827,6 +871,7 @@ gameSpc.on('connection', function (socket) {
 			r.finalJeopardyCheck = false;
 			r.finalJeopardyWageringPhase = false;
 			r.finalJeopardyAnswerPhase = false;
+			r.finalJeopardyAllWagersEmitted = false;
 			clearFinalJeopardyWagerTimer(r);
 			r.finalJeopardyBet = {};
 			r.isSecondRound = false;
@@ -898,6 +943,9 @@ playerSpc.on('connection', function (socket) {
 			console.log('PLAYER RECONNECT: ' + name);
 			if (room.gameState.active === true) {
 				sendPlayerReconnectState(socket, name, room);
+				if (room.finalJeopardyCheck && room.finalJeopardyWageringPhase) {
+					syncFinalJeopardyWagersToHost(room);
+				}
 				return;
 			}
 			if (
@@ -1182,6 +1230,8 @@ playerSpc.on('connection', function (socket) {
 				return;
 			}
 			if (r.finalJeopardyBet[bet.playerName]) {
+				/* Already recorded — re-sync in case the host missed the original emit (reconnect). */
+				syncFinalJeopardyWagersToHost(r);
 				return;
 			}
 			var player = r.players[bet.playerName];
@@ -1197,10 +1247,16 @@ playerSpc.on('connection', function (socket) {
 				playerName: bet.playerName,
 				bet: clampedBet,
 			});
-			if (allPlayersHaveFinalJeopardyBet(r)) {
-				clearFinalJeopardyWagerTimer(r);
-			}
+			maybeEmitAllFinalJeopardyWagersReady(r);
 		}
+	});
+
+	socket.on('final jeopardy reveal player', function (data) {
+		var r = getRoomFromSocket(socket);
+		if (!r || !data) {
+			return;
+		}
+		emitPlayers(r.code, 'final jeopardy reveal player', data);
 	});
 
 	socket.on('player field fj time out', function (playerName) {
@@ -1570,6 +1626,8 @@ function sendPlayerReconnectState(socket, name, room) {
 		fjBetEntry && fjBetEntry.bet !== undefined && fjBetEntry.bet !== null
 			? fjBetEntry.bet
 			: null;
+	var allFjWagersIn =
+		room.finalJeopardyWageringPhase && allPlayersHaveFinalJeopardyBet(room);
 
 	var payload = {
 		'player-name': name,
@@ -1585,6 +1643,7 @@ function sendPlayerReconnectState(socket, name, room) {
 		'final-jeopardy-category': fjq ? fjq._category : '',
 		'final-jeopardy-question': fjq ? fjq._question : '',
 		'final-jeopardy-player-bet': fjBetRecorded,
+		'final-jeopardy-all-wagers-in': allFjWagersIn,
 		'buzzed-in-player-name': room.buzzedInPlayerName,
 		active: room.gameState.active === true,
 		'round-timer': room.roundTimer,

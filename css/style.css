@@ -603,6 +603,10 @@ body{
 	font-family: 'Korinna', sans-serif;
 	font-weight: 800;
 }
+/* Must beat display:flex !important so FJ reveal can show one player at a time */
+.player_display.player-reveal-hidden {
+	display: none !important;
+}
 .player_type{
 	position: absolute;
     right: -50px;

@@ -115,7 +115,7 @@ $(document).ready(function() {
 	var playerNames = new Array();
 	var questionIsLive = false;
 	var finalJeopardyCheck = false;	
-	var playersFJ = new Array();
+	var playersFJ = {};
 	var dailyDoubleBet = 0;
 	var categories = new Array();
 	var animated = false;
@@ -126,6 +126,7 @@ $(document).ready(function() {
 	var finalJeopardyAnswerPeriodStarted = false;
 	var finalJeopardyAnswerPeriodTimer = null;
 	var finalCeremoniesStarted = false;
+	var finalJeopardyAnswersOpened = false;
 	var FINAL_JEOPARDY_THEME_MS = 32500;
 	var answerTime = 15;
 	const SOUNDS_DIR = "../../game-media/sounds/";
@@ -142,9 +143,156 @@ $(document).ready(function() {
 	var skipGameDataAfterHostRestore = false;
 	var hostRestoreSuppress = false;
 
-	//Speech Synthesis
+	//Speech Synthesis — serialized queue so visuals cannot race ahead of narration
 	var synth = window.speechSynthesis;
 	var cachedHostNarrationVoice = null;
+	var hostSpeechQueue = [];
+	var hostSpeechBusy = false;
+	var hostSpeechCurrentJob = null;
+	var hostSpeechFailsafeTimer = null;
+	var hostSpeechJobSeq = 0;
+
+	function clearHostSpeechFailsafe() {
+		if (hostSpeechFailsafeTimer) {
+			clearTimeout(hostSpeechFailsafeTimer);
+			hostSpeechFailsafeTimer = null;
+		}
+	}
+
+	function flushHostSpeech() {
+		var i;
+		for (i = 0; i < hostSpeechQueue.length; i++) {
+			hostSpeechQueue[i].cancelled = true;
+		}
+		hostSpeechQueue = [];
+		if (hostSpeechCurrentJob) {
+			hostSpeechCurrentJob.cancelled = true;
+		}
+		clearHostSpeechFailsafe();
+		try {
+			if (synth && typeof synth.cancel === 'function') {
+				synth.cancel();
+			}
+			/* Chrome can leave speechSynthesis paused after cancel */
+			if (synth && synth.paused && typeof synth.resume === 'function') {
+				synth.resume();
+			}
+		} catch (e) {
+			/* ignore */
+		}
+		hostSpeechBusy = false;
+		hostSpeechCurrentJob = null;
+	}
+
+	function estimateHostSpeechFailsafeMs(message) {
+		var len = String(message || '').length;
+		return Math.min(25000, Math.max(2800, len * 70 + 1200));
+	}
+
+	function pumpHostSpeechQueue() {
+		if (hostSpeechBusy) {
+			return;
+		}
+		var job = null;
+		while (hostSpeechQueue.length) {
+			job = hostSpeechQueue.shift();
+			if (job && !job.cancelled) {
+				break;
+			}
+			job = null;
+		}
+		if (!job) {
+			hostSpeechCurrentJob = null;
+			return;
+		}
+
+		hostSpeechBusy = true;
+		hostSpeechCurrentJob = job;
+
+		function finishJob() {
+			if (!job || job.finished) {
+				return;
+			}
+			job.finished = true;
+			clearHostSpeechFailsafe();
+			hostSpeechBusy = false;
+			if (hostSpeechCurrentJob === job) {
+				hostSpeechCurrentJob = null;
+			}
+			if (!job.cancelled && typeof job.callback === 'function') {
+				try {
+					job.callback();
+				} catch (err) {
+					console.error('host speech callback error', err);
+				}
+			}
+			pumpHostSpeechQueue();
+		}
+
+		if (hostSoundMuted || !hostPageAudioPrimed) {
+			hostSpeechFailsafeTimer = setTimeout(
+				finishJob,
+				HOST_SILENT_VOICE_HOLD_MS
+			);
+			return;
+		}
+
+		if (!synth) {
+			finishJob();
+			return;
+		}
+
+		var utterThis = new SpeechSynthesisUtterance(job.message);
+		var narrationVoice = getHostNarrationVoice();
+		if (narrationVoice) {
+			utterThis.voice = narrationVoice;
+			utterThis.lang = narrationVoice.lang || 'en-US';
+		} else {
+			utterThis.lang = 'en-US';
+		}
+		utterThis.pitch = 1;
+		utterThis.rate = 0.9;
+		utterThis.onend = function () {
+			finishJob();
+		};
+		utterThis.onerror = function () {
+			finishJob();
+		};
+		hostSpeechFailsafeTimer = setTimeout(
+			finishJob,
+			estimateHostSpeechFailsafeMs(job.message)
+		);
+		try {
+			if (synth.paused && typeof synth.resume === 'function') {
+				synth.resume();
+			}
+			synth.speak(utterThis);
+		} catch (err) {
+			console.warn('speechSynthesis.speak failed', err);
+			finishJob();
+		}
+	}
+
+	/**
+	 * Speak through a FIFO queue. Callbacks run only after this line finishes
+	 * (or its failsafe), so game steps stay in sync with narration.
+	 * options.interrupt — cancel current/queued speech before enqueuing.
+	 */
+	function messageToVoice(message, needsCallback, callback, options) {
+		options = options || {};
+		if (options.interrupt) {
+			flushHostSpeech();
+		}
+		hostSpeechQueue.push({
+			id: ++hostSpeechJobSeq,
+			message: String(message == null ? '' : message),
+			callback:
+				needsCallback && typeof callback === 'function' ? callback : null,
+			cancelled: false,
+			finished: false,
+		});
+		pumpHostSpeechQueue();
+	}
 
 	function langLower(voice) {
 		return (voice.lang || '').replace(/_/g, '-').toLowerCase();
@@ -954,48 +1102,47 @@ $(document).ready(function() {
 		moveActiveIndicator(activePlayerName);
 		
 		hideQuestionField();
+		flushHostSpeech();
 		if (finalJeopardyCheck)
 		{
 			if(nextRoundFinalJeopardyCalled){ //should only be called once
 				nextRoundFinalJeopardyCalled = false;
 				playSound(roundOverSound);
-				animationQueue.add_function(function(){
-	   				postScreenMessage("Double Jeopardy Round is Over!", false, 0);
+				postScreenMessage("Double Jeopardy Round is Over!", false, 0);
+				messageToVoice("Double Jeopardy Round is Over!", true, function () {
+					socket.emit('final jeopardy started');
+					startFinalJeopardy();
 				});
-				socket.emit('final jeopardy started');
-				setTimeout(startFinalJeopardy, 4000);
 			}	
 		}
 		else
 		{
-			playSound(roundOverSound); 
-			animationQueue.add_function(function(){
-				postScreenMessage("Jeopardy Round is Over!", true, 5000);
+			playSound(roundOverSound);
+			postScreenMessage("Jeopardy Round is Over!", false, 0);
+			messageToVoice("Jeopardy Round is Over!", true, function () {
+				buildBoard(questionList, "Double Jeopardy");
+				animateBoard(false);
+				socket.emit('second round started', contentBoard);
+				setTimeout(function () {
+					startSecondRound(activePlayerName);
+				}, 1200);
 			});
-			buildBoard(questionList, "Double Jeopardy");
-			setTimeout(function(){
-			animateBoard(false);
-			socket.emit('second round started', contentBoard);
-			setTimeout(function(){startSecondRound(activePlayerName)}, 3000);
-			}, 5000);
 		}
 	}
 
 	function startSecondRound(activePlayer)
 	{
 		console.log("START SECOND ROUND");
-		
-		var playerNameSingle;
 
 		if (!animated)
 		{
 			animated = true;
 			var message = "Get ready for the Double Jeopardy Round, all clues will be worth double!";
-
-			messageToVoice(message, false);
-			messageToVoice("Here are your categories.", false);
-			animationQueue.add_function(function(){
-				postScreenMessage(message, true, 5000, function(){categoryAnimate(activePlayer)});
+			postScreenMessage(message, false, 0);
+			messageToVoice(message, true, function () {
+				messageToVoice("Here are your categories.", true, function () {
+					categoryAnimate(activePlayer);
+				});
 			});
 		}
 	}
@@ -1003,19 +1150,27 @@ $(document).ready(function() {
 	function startFinalJeopardy()
 	{
 		flashActiveOff(activePlayerName);
-		//change message color
+		playersFJ = {};
+		playerFJCounter = 0;
+		finalJeopardyAnswersOpened = false;
+		finalJeopardyAnswerPeriodStarted = false;
+		finalJeopardyThemeEnded = false;
+		finalCeremoniesStarted = false;
+		countScores = 0;
 		$("#message_overlay").css("background-color", "rgb(63, 81, 181)");
 		$("#message_overlay").css("color", "rgb(255, 255, 255)");
 		postScreenMessage("", false, 0);
 		var message = "Here is tonights Final Jeopardy Category: ";
-		messageToVoice(message, false);
-		setTimeout(function(){
+		messageToVoice(message, true, function () {
 			playSound(finalJeopardyBloop);
 			stopSound(chooseCategoryTheme);
 			$("#message_overlay").html("<h2>" + questionList["FJ_0_0"].category + "</h2>");
-			messageToVoice(questionList["FJ_0_0"].category, false);
-			messageToVoice("Please make your wager.", true, function(){socket.emit('final jeopardy bid')});
-		}, 4000);
+			messageToVoice(questionList["FJ_0_0"].category, true, function () {
+				messageToVoice("Please make your wager.", true, function () {
+					socket.emit('final jeopardy bid');
+				});
+			});
+		});
 	}
 
 	var playerFJCounter = 0;
@@ -1142,54 +1297,77 @@ $(document).ready(function() {
 		}, 50);
 	}
 
-	//bid is submitted
+	//bid is submitted (progressive sync; answer period opens via 'all wagers ready')
 	socket.on('final jeopardy response', function(response){
-		if (playersFJ[response.playerName]) {
-			playersFJ[response.playerName].bet = response.bet;
-			return;
-		}
-		playersFJ[response.playerName] = {
+		playersFJ[response.playerName] = playersFJ[response.playerName] || {
 			playerName: response.playerName,
-			bet: response.bet,
 			buzzedInFJ: false,
 			scoreRecorded: false,
 		};
+		playersFJ[response.playerName].playerName = response.playerName;
+		playersFJ[response.playerName].bet = response.bet;
 		playerFJCounter++;
-
-		var wagerCount = 0;
-		var nameKey;
-		for (nameKey in playersFJ) {
-			if (Object.prototype.hasOwnProperty.call(playersFJ, nameKey) && playersFJ[nameKey] && playersFJ[nameKey].playerName) {
-				wagerCount++;
-			}
-		}
-
-		if (playerNames.length > 0 && wagerCount >= playerNames.length)
-		{
-			displayQuestion(questionList["FJ_0_0"].question, "FJ_0_0");
-			postScreenMessage(questionList["FJ_0_0"].category + "</br></br>" + questionList["FJ_0_0"].question, false);
-			var msgSuccess = false;
-			var answerPeriodOpened = false;
-			function openFJAnswers() {
-				if (answerPeriodOpened) {
-					return;
-				}
-				answerPeriodOpened = true;
-				beginFinalJeopardyAnswerPeriod();
-				socket.emit('open response final jeopardy');
-			}
-			messageToVoice("The answer is: " + questionList["FJ_0_0"].question + "...Good Luck!", true, function(){
-				openFJAnswers();
-				msgSuccess = true;
-			});
-			
-			setTimeout(function(){
-				if (!msgSuccess){
-					openFJAnswers();
-				}
-			}, 10000);
-		}
 	});
+
+	socket.on('final jeopardy wagers sync', function(payload){
+		mergeFinalJeopardyBets(payload && payload.bets);
+	});
+
+	socket.on('final jeopardy all wagers ready', function(payload){
+		mergeFinalJeopardyBets(payload && payload.bets);
+		openFinalJeopardyAnswersOnce();
+	});
+
+	function mergeFinalJeopardyBets(bets) {
+		if (!bets || !bets.length) {
+			return;
+		}
+		var i;
+		for (i = 0; i < bets.length; i++) {
+			var bet = bets[i];
+			if (!bet || !bet.playerName) {
+				continue;
+			}
+			playersFJ[bet.playerName] = playersFJ[bet.playerName] || {
+				playerName: bet.playerName,
+				buzzedInFJ: false,
+				scoreRecorded: false,
+			};
+			playersFJ[bet.playerName].playerName = bet.playerName;
+			playersFJ[bet.playerName].bet = bet.bet;
+		}
+	}
+
+	function openFinalJeopardyAnswersOnce() {
+		if (finalJeopardyAnswersOpened) {
+			return;
+		}
+		if (!questionList['FJ_0_0']) {
+			return;
+		}
+		finalJeopardyAnswersOpened = true;
+		displayQuestion(questionList["FJ_0_0"].question, "FJ_0_0");
+		postScreenMessage(questionList["FJ_0_0"].category + "</br></br>" + questionList["FJ_0_0"].question, false);
+		var msgSuccess = false;
+		var answerPeriodOpened = false;
+		function openFJAnswers() {
+			if (answerPeriodOpened) {
+				return;
+			}
+			answerPeriodOpened = true;
+			beginFinalJeopardyAnswerPeriod();
+			socket.emit('open response final jeopardy');
+		}
+		messageToVoice("The answer is: " + questionList["FJ_0_0"].question + "...Good Luck!", true, function(){
+			openFJAnswers();
+			msgSuccess = true;
+		});
+		setTimeout(function(){
+			if (!msgSuccess){
+				openFJAnswers();
+			}
+		}, 10000);
+	}
 
 	function finalCeremonies()
 	{
@@ -1234,7 +1412,7 @@ $(document).ready(function() {
 		}
 
 		$('.player_display .secure_player_container').empty();
-		$('.player_display').hide();
+		$('.player_display').addClass('player-reveal-hidden');
 		$('#player_container').css({ width: '100%', height: '100%' });
 
 		$('#player_container').slideDown('slow', function () {
@@ -1269,32 +1447,53 @@ $(document).ready(function() {
 		}
 
 		var curPlayerObject = playersFJ[playerNamesArray[index]];
+		if (!curPlayerObject) {
+			revealFinalJeopardyPlayer(index + 1, playerNamesArray, winners, necessaryAnswer);
+			return;
+		}
+
 		var $slide = $('#player_' + index);
 		var $container = $slide.find('.secure_player_container');
-		$('.player_display').hide();
+		$('.player_display').addClass('player-reveal-hidden');
 		$container.empty();
-		$slide.css('display', 'flex').show();
+		$slide.removeClass('player-reveal-hidden');
 
 		var correctText = curPlayerObject.correct ? 'correct' : 'incorrect';
 		var answer = curPlayerObject.answer;
 		var msgAnswer = curPlayerObject.answer || '';
-		var playerSaid = curPlayerObject.playerName + ' said, ';
+		var intro = curPlayerObject.playerName + ' said, ';
 		if (answer === undefined || answer === '') {
 			answer = '?';
 			msgAnswer = '';
-			playerSaid = curPlayerObject.playerName + " couldn't come up with anything.  ";
+			intro = curPlayerObject.playerName + " couldn't come up with anything.  ";
 		}
 
-		messageToVoice(playerSaid, false);
-		setTimeout(function () {
-			$container.append($('<h2>').text(curPlayerObject.playerName));
-			$container.append($('<h2>').text(String(answer)));
-			messageToVoice(
-				(msgAnswer ? msgAnswer + ' ' : '') + 'and was ' + correctText + '.',
-				true,
-				function () {
-					messageToVoice('They wagered ' + curPlayerObject.bet + '.', true, function () {
-						$container.append($('<h2>').text(String(curPlayerObject.bet)));
+		$container.append($('<h2>').text(curPlayerObject.playerName));
+		$container.append($('<h2>').text(String(answer)));
+
+		socket.emit('final jeopardy reveal player', {
+			playerName: curPlayerObject.playerName,
+			correct: !!curPlayerObject.correct,
+			score: curPlayerObject.score,
+			answer: curPlayerObject.answer || '',
+			bet: curPlayerObject.bet,
+		});
+
+		var resultLine =
+			intro +
+			(msgAnswer ? msgAnswer + ' ' : '') +
+			'and was ' +
+			correctText +
+			'.';
+		messageToVoice(
+			resultLine,
+			true,
+			function () {
+				$container.append($('<h2>').text(String(curPlayerObject.bet)));
+				messageToVoice(
+					'They wagered ' + curPlayerObject.bet + '.',
+					true,
+					function () {
 						setTimeout(function () {
 							revealFinalJeopardyPlayer(
 								index + 1,
@@ -1302,18 +1501,19 @@ $(document).ready(function() {
 								winners,
 								necessaryAnswer
 							);
-						}, 1800);
-					});
-				}
-			);
-		}, 2000);
+						}, 1500);
+					}
+				);
+			},
+			{ interrupt: true }
+		);
 	}
 
 	function showFinalJeopardyResults(winners, necessaryAnswer) {
 		$('#player_container').fadeOut('fast', function () {
 			$('#player_container').css('display', 'none');
 			$('.player_display .secure_player_container').empty();
-			$('.player_display').hide();
+			$('.player_display').addClass('player-reveal-hidden');
 
 			function buildStandings() {
 				var standings = [];
@@ -1444,7 +1644,9 @@ $(document).ready(function() {
     	finalJeopardyThemeEnded = false;
     	finalJeopardyAnswerPeriodStarted = false;
     	finalCeremoniesStarted = false;
+    	finalJeopardyAnswersOpened = false;
     	nextRoundFinalJeopardyCalled = true;
+    	flushHostSpeech();
     	clearTimeout(finalJeopardyAnswerPeriodTimer);
     	finalJeopardyAnswerPeriodTimer = null;
     	try {
@@ -1461,8 +1663,7 @@ $(document).ready(function() {
 		questionList = [];
 		categories.length = 0;
 		categories = [];
-		playersFJ.length = 0;
-		playersFJ = [];
+		playersFJ = {};
 		playerCount = 0;
 		contentBoard = '';
 		activePlayerName = '';
@@ -1484,7 +1685,7 @@ $(document).ready(function() {
 		$('#category_container').css('display', 'none');
 		$('#player_container').css('display', 'none');
 		$('.player_display .secure_player_container').empty();
-		$('.player_display').hide();
+		$('.player_display').addClass('player-reveal-hidden');
 		$('#game_intro').css('display', 'block');
 		$('#master_container').css('display', 'none');
 		$('.score td').html('0');
@@ -1508,6 +1709,7 @@ $(document).ready(function() {
 	  socket.on('question reveal',function(question){
 	  	timerCount = 6;
 	  	questionIsLive = true;
+	  	flushHostSpeech();
 	  	var hostCell = document.getElementById(question.questionId);
 	  	if (hostCell) {
 	  		hostCell.innerHTML = '';
@@ -1532,46 +1734,24 @@ $(document).ready(function() {
 		 	else //standard question
 		 	{
 		 		var questionRead = false;
-		 		var questionTopRead = false;
-		 		messageToVoice(questionList[question.questionId].category.toLowerCase() + " for " + questionList[question.questionId].value, true, function(){
-		 			questionTopRead = true;
-		 			displayQuestion(question.question, question.questionId);
-				  	messageToVoice(question.question, true, function(){
-				  		questionRead = true;
-					  	console.log("question reveal");
-					  	socket.emit('start countdown', question.questionId);
-					  	playSound(questionTheme);
-				  	});
-				  	setTimeout(function(){ //failsafe if message callback never called
-				  		if (questionRead == false)
-				  		{
-						  	console.log("question reveal");
-						  	socket.emit('start countdown', question.questionId);
-						  	playSound(questionTheme);
-				  		}
-				  	}, 30000);
-		 		});
-
-		 		setTimeout(function(){
-		 			if (questionTopRead == false){
-		 						 			displayQuestion(question.question, question.questionId);
-					  	messageToVoice(question.question, true, function(){
-					  		questionRead = true;
-						  	console.log("question reveal");
-						  	socket.emit('start countdown', question.questionId);
-						  	playSound(questionTheme);
-					  	});
-					  	setTimeout(function(){ //failsafe if message callback never called
-					  		if (questionRead == false)
-					  		{
-							  	console.log("question reveal");
-							  	socket.emit('start countdown', question.questionId);
-							  	playSound(questionTheme);
-					  		}
-					  	}, 30000);
+		 		messageToVoice(
+		 			questionList[question.questionId].category.toLowerCase() +
+		 				' for ' +
+		 				questionList[question.questionId].value,
+		 			true,
+		 			function () {
+		 				displayQuestion(question.question, question.questionId);
+		 				messageToVoice(question.question, true, function () {
+		 					if (questionRead) {
+		 						return;
+		 					}
+		 					questionRead = true;
+		 					console.log('question reveal');
+		 					socket.emit('start countdown', question.questionId);
+		 					playSound(questionTheme);
+		 				});
 		 			}
-		 		}, 30000);
-
+		 		);
 		  	}
 		  }
 		  else{
@@ -1585,19 +1765,16 @@ $(document).ready(function() {
 	  		dailyDoubleBet = question.bet;
 	  		flashActiveOff(activePlayerName);
 	  		var messageSuccess = false;
+	  		displayQuestion(question.question, question.questionId);
+	  		staticMessageOff();
 		  	messageToVoice(question.question, true, function(){ 
+		  		if (messageSuccess) {
+		  			return;
+		  		}
 		  		messageSuccess = true;
 		  		socket.emit('open submit dd');
 		  		drawTypingPopup(activePlayerName);
-		  		});
-		  	setTimeout(function(){
-		  		if(!messageSuccess){
-		  			socket.emit('open submit dd');
-		  			drawTypingPopup(activePlayerName);
-		  		}
-		  	}, 18000);
-		  	displayQuestion(question.question, question.questionId);
-		  	staticMessageOff();
+		  	}, { interrupt: true });
 	  });
 
 	 //capture buzzer press buzzed in buzz in
@@ -1625,6 +1802,7 @@ $(document).ready(function() {
 
 	 	hidePopup(score.playerName);
 	 	console.log("hide popup should be called for " + score.playerName);
+	 	flushHostSpeech();
 
 	 	if(score.correct == true && !score.dailyDouble)
 	 	{
@@ -2001,10 +2179,14 @@ $(document).ready(function() {
     			fx: 'scrollRight',
     			next: '#category_container',
     			speed: 100,
-    			timeout: 3000,
+    			timeout: 4200,
     			after: function () {
-    				messageToVoice(categories[index].toLowerCase(), false);
-    				index++;
+    				if (index < categories.length) {
+    					messageToVoice(categories[index].toLowerCase(), false, null, {
+    						interrupt: true,
+    					});
+    					index++;
+    				}
     			},
     			fit: true,
     			width: cw,
@@ -2017,8 +2199,8 @@ $(document).ready(function() {
     				$cc.cycle('stop');
     				playSound(openUpSound);
     				$cc.slideUp('fast', function () {
-    					postScreenMessage(playerName + ', you have the board.', true, 2000);
     					message = playerName + ', you have the board.';
+    					postScreenMessage(message, true, 2000);
     					messageToVoice(message, true, function () {
     						playSound(chooseCategoryTheme);
     						flashActiveOn(activePlayerName);
@@ -2057,13 +2239,11 @@ $(document).ready(function() {
 
 	function dailyDoubleSegment(questionId, playerName)
 	{
-		//postScreenMessage("DAILY DOUBLE!", true);
 		var message = playerName + " has selected " + questionList[questionId].category + ".";
 		messageToVoice(message, true, function(){
 			playSound(dailyDoubleSound);
 			postScreenMessage(playerName + " is setting their wager.", false, 0);
-			//bet is made public
-		});
+		}, { interrupt: true });
 	}
 
 
@@ -2342,56 +2522,6 @@ $(document).ready(function() {
     function updateScore(playerName, score)
     {
     	$("#name_" + nameIds[playerName]).html(score);
-    }
-
-    var chunkLength = 120;
-	var pattRegex = new RegExp('^[\\s\\S]{' + Math.floor(chunkLength / 2) + ',' + chunkLength + '}[.!?,]{1}|^[\\s\\S]{1,' + chunkLength + '}$|^[\\s\\S]{1,' + chunkLength + '} ');
-    
-    //read question aloud
-    function messageToVoice(message, needsCallback, callback)
-    {
-		if (hostSoundMuted || !hostPageAudioPrimed) {
-			if (needsCallback && typeof callback === 'function') {
-				setTimeout(callback, HOST_SILENT_VOICE_HOLD_MS);
-			}
-			return;
-		}
-
-		var utterThis = new SpeechSynthesisUtterance(message);
-		var narrationVoice = getHostNarrationVoice();
-		if (narrationVoice) {
-			utterThis.voice = narrationVoice;
-			utterThis.lang = narrationVoice.lang || 'en-US';
-		} else {
-			utterThis.lang = 'en-US';
-		}
-		utterThis.pitch = 1;
-		utterThis.rate = 0.9;
-		synth.speak(utterThis);
-
-		if (needsCallback && typeof callback === 'function')
-		{
-			var called = false;
-			function once() {
-				if (called) {
-					return;
-				}
-				called = true;
-				callback();
-			}
-			utterThis.onend = function () {
-			    once();
-			};
-			utterThis.onerror = function () {
-				once();
-			};
-			/* speechSynthesis.onend is unreliable in some browsers; always failsafe */
-			var failsafeMs = Math.min(
-				20000,
-				Math.max(8000, String(message || '').length * 80)
-			);
-			setTimeout(once, failsafeMs);
-		}
     }
 
     function playSound(soundName)
