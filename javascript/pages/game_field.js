@@ -123,6 +123,10 @@ $(document).ready(function() {
 	var roundTimer = 600;
 	var hostRoundIsDoubleJeopardy = false;
 	var finalJeopardyThemeEnded = false;
+	var finalJeopardyAnswerPeriodStarted = false;
+	var finalJeopardyAnswerPeriodTimer = null;
+	var finalCeremoniesStarted = false;
+	var FINAL_JEOPARDY_THEME_MS = 32500;
 	var answerTime = 15;
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR = "../../game-media/images/";
@@ -959,7 +963,7 @@ $(document).ready(function() {
 	   				postScreenMessage("Double Jeopardy Round is Over!", false, 0);
 				});
 				socket.emit('final jeopardy started');
-				setTimeout(startFinalJeopardy(), 4000);
+				setTimeout(startFinalJeopardy, 4000);
 			}	
 		}
 		else
@@ -1016,9 +1020,136 @@ $(document).ready(function() {
 
 	var playerFJCounter = 0;
 
+	function beginFinalJeopardyAnswerPeriod() {
+		if (finalJeopardyAnswerPeriodStarted) {
+			return;
+		}
+		finalJeopardyAnswerPeriodStarted = true;
+
+		playSound(finalJeopardyTheme);
+
+		var durationMs = FINAL_JEOPARDY_THEME_MS;
+		if (
+			finalJeopardyTheme.duration &&
+			isFinite(finalJeopardyTheme.duration) &&
+			finalJeopardyTheme.duration > 0
+		) {
+			durationMs = Math.ceil(finalJeopardyTheme.duration * 1000) + 250;
+		}
+
+		clearTimeout(finalJeopardyAnswerPeriodTimer);
+		finalJeopardyAnswerPeriodTimer = setTimeout(function () {
+			onFinalJeopardyTimeUp();
+		}, durationMs);
+	}
+
+	function onFinalJeopardyTimeUp() {
+		if (finalJeopardyThemeEnded) {
+			return;
+		}
+		finalJeopardyThemeEnded = true;
+		clearTimeout(finalJeopardyAnswerPeriodTimer);
+		finalJeopardyAnswerPeriodTimer = null;
+		try {
+			finalJeopardyTheme.pause();
+			finalJeopardyTheme.currentTime = 0;
+		} catch (e) {
+			/* ignore */
+		}
+
+		socket.emit('final jeopardy time out');
+		waitForFinalScoresThenCeremonies();
+	}
+
+	function applyFJScore(scoreFJ) {
+		if (!scoreFJ || !scoreFJ.playerName) {
+			return;
+		}
+		var entry = playersFJ[scoreFJ.playerName];
+		if (!entry) {
+			return;
+		}
+
+		if (entry.scoreRecorded) {
+			if (scoreFJ.buzzedInFJ && !entry.buzzedInFJ) {
+				entry.buzzedInFJ = true;
+				entry.score = scoreFJ.score;
+				entry.correct = !!scoreFJ.correct;
+				entry.answer = scoreFJ.answer || '';
+			}
+			return;
+		}
+
+		entry.buzzedInFJ = !!scoreFJ.buzzedInFJ;
+		entry.score = scoreFJ.score;
+		entry.correct = !!scoreFJ.correct;
+		entry.answer = scoreFJ.answer || '';
+		entry.scoreRecorded = true;
+		countScores++;
+		tryStartFinalCeremonies();
+	}
+
+	function fillMissingFJScores() {
+		var i;
+		for (i = 0; i < playerNames.length; i++) {
+			var name = playerNames[i];
+			var p = playersFJ[name];
+			if (!p || p.scoreRecorded) {
+				continue;
+			}
+			var bet = parseInt(p.bet, 10);
+			if (isNaN(bet)) {
+				bet = 0;
+			}
+			var currentScore = 0;
+			if (nameIds[name] !== undefined) {
+				currentScore = parseInt($('#name_' + nameIds[name]).html(), 10);
+				if (isNaN(currentScore)) {
+					currentScore = 0;
+				}
+			}
+			applyFJScore({
+				playerName: name,
+				score: currentScore - bet,
+				correct: false,
+				answer: '',
+				buzzedInFJ: false,
+			});
+		}
+	}
+
+	function tryStartFinalCeremonies() {
+		if (!finalJeopardyThemeEnded || finalCeremoniesStarted) {
+			return;
+		}
+		if (countScores >= playerNames.length) {
+			finalCeremonies();
+		}
+	}
+
+	function waitForFinalScoresThenCeremonies() {
+		tryStartFinalCeremonies();
+		if (finalCeremoniesStarted) {
+			return;
+		}
+		var waitStart = Date.now();
+		var lastTimer = setInterval(function () {
+			if (countScores >= playerNames.length || Date.now() - waitStart > 20000) {
+				clearInterval(lastTimer);
+				fillMissingFJScores();
+				tryStartFinalCeremonies();
+			}
+		}, 50);
+	}
+
 	//bid is submitted
 	socket.on('final jeopardy response', function(response){
-		playerFJObject = {playerName: response.playerName, bet: response.bet, buzzedInFJ: false};
+		playerFJObject = {
+			playerName: response.playerName,
+			bet: response.bet,
+			buzzedInFJ: false,
+			scoreRecorded: false,
+		};
 		playersFJ[response.playerName]= playerFJObject;
 		if (
 			playerNames.length > 0 &&
@@ -1028,16 +1159,23 @@ $(document).ready(function() {
 			displayQuestion(questionList["FJ_0_0"].question, "FJ_0_0");
 			postScreenMessage(questionList["FJ_0_0"].category + "</br></br>" + questionList["FJ_0_0"].question, false);
 			var msgSuccess = false;
-			messageToVoice("The answer is: " + questionList["FJ_0_0"].question + "...Good Luck!", true, function(){
-				playSound(finalJeopardyTheme);
+			var answerPeriodOpened = false;
+			function openFJAnswers() {
+				if (answerPeriodOpened) {
+					return;
+				}
+				answerPeriodOpened = true;
+				beginFinalJeopardyAnswerPeriod();
 				socket.emit('open response final jeopardy');
+			}
+			messageToVoice("The answer is: " + questionList["FJ_0_0"].question + "...Good Luck!", true, function(){
+				openFJAnswers();
 				msgSuccess = true;
 			});
 			
 			setTimeout(function(){
 				if (!msgSuccess){
-					playSound(finalJeopardyTheme);
-					socket.emit('open response final jeopardy');
+					openFJAnswers();
 				}
 			}, 10000);
 		}
@@ -1046,124 +1184,189 @@ $(document).ready(function() {
 
 	function finalCeremonies()
 	{
-		var index = 0;
-		var winnerPlayer;
-		var playerNamesArray = new Array();
+		if (finalCeremoniesStarted) {
+			return;
+		}
+		finalCeremoniesStarted = true;
+
+		var winnerPlayer = null;
+		var playerNamesArray = [];
 		var necessaryAnswer = false;
-		
+		var compareScore = -99999;
+		var i;
 
-    	$("#player_container").slideDown("slow", function() {
-	    // Animation complete.
-	  		
+		console.log(playersFJ);
+		for (i = 0; i < playerNames.length; i++) {
+			var name = playerNames[i];
+			var p = playersFJ[name];
+			if (!p) {
+				continue;
+			}
+			var scoreForEndGame = parseInt(p.score, 10);
+			if (isNaN(scoreForEndGame)) {
+				scoreForEndGame = 0;
+			}
+			p.score = scoreForEndGame;
+			updateScore(p.playerName, scoreForEndGame);
+			if (scoreForEndGame > compareScore) {
+				winnerPlayer = p;
+				compareScore = scoreForEndGame;
+			}
+			if (!p.correct) {
+				necessaryAnswer = true;
+			}
+			playerNamesArray.push(name);
+		}
 
-	    	var compareScore = -99999; //set to something very low in case everyone is in negatives
-	    	console.log(playersFJ);
-			for(player in playersFJ)
-			{	
-				
-				var scoreForEndGame = parseInt(playersFJ[player].score);
-				updateScore(playersFJ[player].playerName, scoreForEndGame);
-				if (scoreForEndGame > compareScore)
-				{
-					winnerPlayer = playersFJ[player];
-					compareScore = scoreForEndGame;
+		if (!winnerPlayer && playerNamesArray.length) {
+			winnerPlayer = playersFJ[playerNamesArray[0]];
+		}
+
+		$('.player_display .secure_player_container').empty();
+		$('.player_display').hide();
+		$('#player_container').css({ width: '100%', height: '100%' });
+
+		$('#player_container').slideDown('slow', function () {
+			messageToVoice('Lets take a look at the answers.', true, function () {
+				revealFinalJeopardyPlayer(0, playerNamesArray, winnerPlayer, necessaryAnswer);
+			});
+		});
+	}
+
+	function revealFinalJeopardyPlayer(index, playerNamesArray, winnerPlayer, necessaryAnswer) {
+		if (index >= playerNamesArray.length) {
+			showFinalJeopardyResults(winnerPlayer, necessaryAnswer);
+			return;
+		}
+
+		var curPlayerObject = playersFJ[playerNamesArray[index]];
+		var $slide = $('#player_' + index);
+		var $container = $slide.find('.secure_player_container');
+		$('.player_display').hide();
+		$container.empty();
+		$slide.css('display', 'flex').show();
+
+		var correctText = curPlayerObject.correct ? 'correct' : 'incorrect';
+		var answer = curPlayerObject.answer;
+		var msgAnswer = curPlayerObject.answer || '';
+		var playerSaid = curPlayerObject.playerName + ' said, ';
+		if (answer === undefined || answer === '') {
+			answer = '?';
+			msgAnswer = '';
+			playerSaid = curPlayerObject.playerName + " couldn't come up with anything.  ";
+		}
+
+		messageToVoice(playerSaid, false);
+		setTimeout(function () {
+			$container.append($('<h2>').text(curPlayerObject.playerName));
+			$container.append($('<h2>').text(String(answer)));
+			messageToVoice(
+				(msgAnswer ? msgAnswer + ' ' : '') + 'and was ' + correctText + '.',
+				true,
+				function () {
+					messageToVoice('They wagered ' + curPlayerObject.bet + '.', true, function () {
+						$container.append($('<h2>').text(String(curPlayerObject.bet)));
+						setTimeout(function () {
+							revealFinalJeopardyPlayer(
+								index + 1,
+								playerNamesArray,
+								winnerPlayer,
+								necessaryAnswer
+							);
+						}, 1800);
+					});
 				}
-				if(!playersFJ[player.correct]){
-					necessaryAnswer = true;
+			);
+		}, 2000);
+	}
+
+	function showFinalJeopardyResults(winnerPlayer, necessaryAnswer) {
+		$('#player_container').fadeOut('fast', function () {
+			$('#player_container').css('display', 'none');
+			$('.player_display .secure_player_container').empty();
+			$('.player_display').hide();
+
+			function buildFinalStandingsListHtml() {
+				var standings = [];
+				var i;
+				for (i = 0; i < playerNames.length; i++) {
+					var p = playersFJ[playerNames[i]];
+					if (!p) {
+						continue;
+					}
+					standings.push({
+						name: p.playerName,
+						score: parseInt(p.score, 10) || 0,
+					});
 				}
-				playerNamesArray.push(playersFJ[player].playerName);
+				standings.sort(function (a, b) {
+					return b.score - a.score;
+				});
+				var html = '<ol>';
+				for (i = 0; i < standings.length; i++) {
+					html +=
+						'<li>' +
+						$('<div>').text(standings[i].name).html() +
+						' — $' +
+						standings[i].score +
+						'</li>';
+				}
+				html += '</ol>';
+				return html;
 			}
 
-			messageToVoice("Lets take a look at the answers.", true, function(){
-		    	//animate through each
-		    	$("#player_container").cycle({
-		    		fx: 'scrollRight',
-		    		next: "#player_container",
-		    		speed:    100,
-		    		timeout: 10000,
-		    		after: function(){
-		    			if(index<playerNamesArray.length)
-		    			{
-			    			var curPlayerObject = playersFJ[playerNamesArray[index]];
-			    			var correctText = "incorrect";
-			    			if (curPlayerObject.correct)
-			    			{
-			    				correctText = "correct";
-			    			}
-			    			var answer = curPlayerObject.answer;
-			    			var msgAnswer = curPlayerObject.answer;
-			    			var playerSaid = curPlayerObject.playerName + " said, ";
-			    			if(answer === undefined || answer =='')
-			    			{
-			    				answer = "?"
-			    				msgAnswer = "";
-			    				playerSaid = curPlayerObject.playerName + " couldn't come up with anything.  "
-			    			}
-			    			
-			    			messageToVoice(playerSaid, false);
-			    					setTimeout(function()
-			    					{
-			    						$("#player_" + index + " .secure_player_container").append("<h2>" + curPlayerObject.playerName + "</h2>");
-			    						$("#player_" + index + " .secure_player_container").append("<h2>" + answer + "</h2>");
-			    						messageToVoice(msgAnswer + " and was " + correctText + ".  They wagered " + curPlayerObject.bet + ".", true,
-			    							function()
-			    							{
-			    								$("#player_" + index + " .secure_player_container").append("<h2>" + curPlayerObject.bet + "</h2>");
-			    								index++;
-			    							});
-			    					}, 2000);
-		    			}
-		    			else{
-		    				$('#player_container').cycle('stop');
-		    				$('#player_container').fadeOut('fast');
-		    			}
-		    		},
-		    		height: 'auto',
-		    		easing:  'easeInOutBack',
-		    		autostop: 1,
-		    		end: function(options)
-		    		{
+			function announceWinnerAndScores() {
+				var standingsList = buildFinalStandingsListHtml();
+				if (!winnerPlayer) {
+					$('#message_overlay')
+						.html('<div><h2>FINAL RESULTS</h2>' + standingsList + '</div>')
+						.fadeIn('slow');
+					setTimeout(function () {
+						socket.emit('fetch high scores');
+					}, 5000);
+					return;
+				}
 
-						console.log(playersFJ);
-						$('#player_container').animate({
-							width: "85%",
-							height: "100%"
-						}, 1000, function() {
-							$("#player_container").fadeOut('fast');
-							$("#player_container").css("display", "none");
-							if(necessaryAnswer)
-							{
-								messageToVoice("The answer we were looking for was " + questionList["FJ_0_0"].answer , false);
-								postScreenMessage(questionList["FJ_0_0"].answer, false, 0);
-								setTimeout(function()
-									{
-										messageToVoice("Todays winner is " + winnerPlayer.playerName + " with " + winnerPlayer.score + ", congratulations!  See you next time.", false);
-										postScreenMessage("You win " + winnerPlayer.playerName + "!", false, 0);
-									    jeopardyIntroMusic.volume = 1;
-									    playSound(jeopardyIntroMusic);
-									}, 4000);
+				messageToVoice(
+					'Todays winner is ' +
+						winnerPlayer.playerName +
+						' with ' +
+						winnerPlayer.score +
+						', congratulations!  See you next time.',
+					false
+				);
+				$('#message_overlay')
+					.html(
+						'<div><h2>You win ' +
+							$('<div>').text(winnerPlayer.playerName).html() +
+							'!</h2>' +
+							standingsList +
+							'</div>'
+					)
+					.fadeIn('slow');
+				jeopardyIntroMusic.volume = 1;
+				playSound(jeopardyIntroMusic);
+				socket.emit('game over', {
+					winningPlayerName: winnerPlayer.playerName,
+					winningPlayerScore: winnerPlayer.score,
+				});
+				setTimeout(function () {
+					socket.emit('fetch high scores');
+				}, 10000);
+			}
 
-								socket.emit('game over', {winningPlayerName: winnerPlayer.playerName, winningPlayerScore: winnerPlayer.score});
-							}
-							else
-							{
-								messageToVoice("Todays winner is " + winnerPlayer.playerName + " with " + winnerPlayer.score + ", congratulations!  See you next time.", false);
-								postScreenMessage("You win " + winnerPlayer.playerName + "!", false, 0);
-							    jeopardyIntroMusic.volume = 1;
-							    playSound(jeopardyIntroMusic);
-							    socket.emit('game over', {winningPlayerName: winnerPlayer.playerName, winningPlayerScore: winnerPlayer.score});
-							}
-
-							setTimeout(function(){
-								socket.emit('fetch high scores');
-							}, 10000);
-
-						  });
-		    		}
-		    	});
-	    	});	
-    	});
-    }
+			if (necessaryAnswer && questionList['FJ_0_0']) {
+				messageToVoice(
+					'The answer we were looking for was ' + questionList['FJ_0_0'].answer,
+					false
+				);
+				postScreenMessage(questionList['FJ_0_0'].answer, false, 0);
+				setTimeout(announceWinnerAndScores, 4000);
+			} else {
+				announceWinnerAndScores();
+			}
+		});
+	}
 
     socket.on('high scores', function(highScores){
     	console.log("HIGH SCORES : " + JSON.stringify(highScores));
@@ -1184,6 +1387,18 @@ $(document).ready(function() {
     	skipGameDataAfterHostRestore = false;
     	playerFJCounter = 0;
     	countScores = 0;
+    	finalJeopardyThemeEnded = false;
+    	finalJeopardyAnswerPeriodStarted = false;
+    	finalCeremoniesStarted = false;
+    	nextRoundFinalJeopardyCalled = true;
+    	clearTimeout(finalJeopardyAnswerPeriodTimer);
+    	finalJeopardyAnswerPeriodTimer = null;
+    	try {
+    		finalJeopardyTheme.pause();
+    		finalJeopardyTheme.currentTime = 0;
+    	} catch (e) {
+    		/* ignore */
+    	}
     	$('#host_game_load_status')
     		.removeClass('host-game-load-status--error')
     		.addClass('host-game-load-status--hidden')
@@ -1214,6 +1429,8 @@ $(document).ready(function() {
 		$('#message_overlay').css('display', 'none');
 		$('#category_container').css('display', 'none');
 		$('#player_container').css('display', 'none');
+		$('.player_display .secure_player_container').empty();
+		$('.player_display').hide();
 		$('#game_intro').css('display', 'block');
 		$('#master_container').css('display', 'none');
 		$('.score td').html('0');
@@ -1494,41 +1711,11 @@ $(document).ready(function() {
 	 socket.on('score update final jeopardy', function(scoreFJ){
 	 		hideHostAiJudging();
 	 		console.log("score update score: " + scoreFJ.score + " player name: " + scoreFJ.playerName);
-	 		if (!finalJeopardyThemeEnded){
-		 		if (scoreFJ.buzzedInFJ)
-		 		{
-		 			playersFJ[scoreFJ.playerName].buzzedInFJ = scoreFJ.buzzedInFJ;
-		 			playersFJ[scoreFJ.playerName].score = scoreFJ.score;
-		 			playersFJ[scoreFJ.playerName].correct= scoreFJ.correct;
-		 			playersFJ[scoreFJ.playerName].answer = scoreFJ.answer;
-		 			countScores++;
-		 		}
-		 		if (!playersFJ[scoreFJ.playerName].buzzedInFJ)
-		 		{
-					playersFJ[scoreFJ.playerName].score = scoreFJ.score;
-		 			playersFJ[scoreFJ.playerName].correct= scoreFJ.correct;
-		 			playersFJ[scoreFJ.playerName].answer = scoreFJ.answer;
-		 			countScores++;
-		 		}
-	 		}
+	 		applyFJScore(scoreFJ);
 	 });
 
 	 socket.on('score update final jeopardy buzzed out', function(scoreFJ){
-		 		if (scoreFJ.buzzedInFJ)
-		 		{
-		 			playersFJ[scoreFJ.playerName].buzzedInFJ = scoreFJ.buzzedInFJ;
-		 			playersFJ[scoreFJ.playerName].score = scoreFJ.score;
-		 			playersFJ[scoreFJ.playerName].correct= scoreFJ.correct;
-		 			playersFJ[scoreFJ.playerName].answer = scoreFJ.answer;
-		 			countScores++;
-		 		}
-		 		if (!playersFJ[scoreFJ.playerName].buzzedInFJ)
-		 		{
-					playersFJ[scoreFJ.playerName].score = scoreFJ.score;
-		 			playersFJ[scoreFJ.playerName].correct= scoreFJ.correct;
-		 			playersFJ[scoreFJ.playerName].answer = scoreFJ.answer;
-		 			countScores++;
-		 		}
+	 		applyFJScore(scoreFJ);
 	 });
 
 	 var timerCount = 6;
@@ -2015,26 +2202,9 @@ $(document).ready(function() {
     	this.play().catch(function () { /* ignore */ });
 	}, false);
 
-    //when the final jeopardy theme ends
+    //when the final jeopardy theme ends (or silent fallback timer fires via onFinalJeopardyTimeUp)
     finalJeopardyTheme.addEventListener('ended', function() {
-    	finalJeopardyThemeEnded = true;
-    	socket.emit('final jeopardy time out');
-    	this.currentTime = 0;
-    	if(countScores>=playerNames.length)
-    	{
-    		finalCeremonies();
-    	}
-    	else
-    	{
-    		var lastTimer = setInterval(function()
-    			{
-    				if(countScores>=playerNames.length)
-    				{
-    					finalCeremonies();
-    					clearInterval(lastTimer);
-    				}
-    			}, 10);
-    	}
+    	onFinalJeopardyTimeUp();
 	}, false);
     //capture buzz out
     //buzzed in time ran out

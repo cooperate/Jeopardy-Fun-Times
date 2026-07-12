@@ -654,7 +654,6 @@ $(document).ready(function() {
 	   socket.on('final jeopardy time out', function(){
 	   		console.log("FJ TIME OUT");
 	   		postScreenMessage("Please look at the game board.", false, 0);
-	   		socket.emit('player field fj time out', playerName);
 	   		$("#answer_field").blur();
 	   		if (!finalJeopardyAnswered){
 	   			socket.emit('player no answer final jeopardy', playerName);

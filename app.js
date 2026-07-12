@@ -1022,9 +1022,22 @@ playerSpc.on('connection', function (socket) {
 			return;
 		}
 		var fb = r.finalJeopardyBet[playerName];
-		if (fb && fb.bet !== undefined) {
-			r.players[playerName].score -= fb.bet;
+		if (!fb || fb.scored) {
+			return;
 		}
+		fb.scored = true;
+		var bet = parseInt(fb.bet, 10);
+		if (isNaN(bet)) {
+			bet = 0;
+		}
+		r.players[playerName].score -= bet;
+		emitGame(r.code, 'score update final jeopardy buzzed out', {
+			playerName: playerName,
+			score: r.players[playerName].score,
+			correct: false,
+			answer: '',
+			buzzedInFJ: false,
+		});
 	});
 
 	socket.on('answer selection', function (answer) {
@@ -1072,20 +1085,13 @@ playerSpc.on('connection', function (socket) {
 	});
 
 	socket.on('player field fj time out', function (playerName) {
+		// Legacy no-op: unanswered Final Jeopardy scoring is handled by
+		// 'player no answer final jeopardy' so scores are not double-subtracted.
 		var r = getRoomFromSocket(socket);
 		if (!r) {
 			return;
 		}
-		console.log('sending data: score  ' + r.players[playerName].score + 'name ' + playerName);
-		var timeOutScore = parseInt(r.players[playerName].score, 10);
-		timeOutScore -= parseInt(r.finalJeopardyBet[playerName].bet, 10);
-		emitGame(r.code, 'score update final jeopardy buzzed out', {
-			playerName: playerName,
-			score: timeOutScore,
-			correct: false,
-			answer: '',
-			buzzedInFJ: false,
-		});
+		console.log('player field fj time out (ignored for scoring): ' + playerName);
 	});
 
 	socket.on('disconnect', function () {
@@ -1176,6 +1182,9 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 				} else {
 					score -= parseInt(room.finalJeopardyBet[playerName].bet, 10);
 				}
+				if (room.finalJeopardyBet[playerName]) {
+					room.finalJeopardyBet[playerName].scored = true;
+				}
 			}
 
 			room.players[playerName].score = score;
@@ -1214,6 +1223,24 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 		.catch(function (err) {
 			console.error('evaluateAnswer failed', err);
 			emitGame(room.code, 'answer ai judging end');
+			if (finalJeopardy) {
+				var fb = room.finalJeopardyBet[playerName];
+				if (fb && !fb.scored) {
+					fb.scored = true;
+					var bet = parseInt(fb.bet, 10);
+					if (isNaN(bet)) {
+						bet = 0;
+					}
+					room.players[playerName].score -= bet;
+					emitGame(room.code, 'score update final jeopardy', {
+						score: room.players[playerName].score,
+						answer: originalPlayerAnswer,
+						playerName: playerName,
+						correct: false,
+						buzzedInFJ: true,
+					});
+				}
+			}
 		});
 }
 
