@@ -1144,17 +1144,27 @@ $(document).ready(function() {
 
 	//bid is submitted
 	socket.on('final jeopardy response', function(response){
-		playerFJObject = {
+		if (playersFJ[response.playerName]) {
+			playersFJ[response.playerName].bet = response.bet;
+			return;
+		}
+		playersFJ[response.playerName] = {
 			playerName: response.playerName,
 			bet: response.bet,
 			buzzedInFJ: false,
 			scoreRecorded: false,
 		};
-		playersFJ[response.playerName]= playerFJObject;
-		if (
-			playerNames.length > 0 &&
-			playerFJCounter >= playerNames.length - 1
-		)
+		playerFJCounter++;
+
+		var wagerCount = 0;
+		var nameKey;
+		for (nameKey in playersFJ) {
+			if (Object.prototype.hasOwnProperty.call(playersFJ, nameKey) && playersFJ[nameKey] && playersFJ[nameKey].playerName) {
+				wagerCount++;
+			}
+		}
+
+		if (playerNames.length > 0 && wagerCount >= playerNames.length)
 		{
 			displayQuestion(questionList["FJ_0_0"].question, "FJ_0_0");
 			postScreenMessage(questionList["FJ_0_0"].category + "</br></br>" + questionList["FJ_0_0"].question, false);
@@ -1179,7 +1189,6 @@ $(document).ready(function() {
 				}
 			}, 10000);
 		}
-		playerFJCounter++;
 	});
 
 	function finalCeremonies()
@@ -1189,7 +1198,7 @@ $(document).ready(function() {
 		}
 		finalCeremoniesStarted = true;
 
-		var winnerPlayer = null;
+		var winners = [];
 		var playerNamesArray = [];
 		var necessaryAnswer = false;
 		var compareScore = -99999;
@@ -1209,8 +1218,10 @@ $(document).ready(function() {
 			p.score = scoreForEndGame;
 			updateScore(p.playerName, scoreForEndGame);
 			if (scoreForEndGame > compareScore) {
-				winnerPlayer = p;
+				winners = [p];
 				compareScore = scoreForEndGame;
+			} else if (scoreForEndGame === compareScore) {
+				winners.push(p);
 			}
 			if (!p.correct) {
 				necessaryAnswer = true;
@@ -1218,8 +1229,8 @@ $(document).ready(function() {
 			playerNamesArray.push(name);
 		}
 
-		if (!winnerPlayer && playerNamesArray.length) {
-			winnerPlayer = playersFJ[playerNamesArray[0]];
+		if (!winners.length && playerNamesArray.length) {
+			winners = [playersFJ[playerNamesArray[0]]];
 		}
 
 		$('.player_display .secure_player_container').empty();
@@ -1228,14 +1239,32 @@ $(document).ready(function() {
 
 		$('#player_container').slideDown('slow', function () {
 			messageToVoice('Lets take a look at the answers.', true, function () {
-				revealFinalJeopardyPlayer(0, playerNamesArray, winnerPlayer, necessaryAnswer);
+				revealFinalJeopardyPlayer(0, playerNamesArray, winners, necessaryAnswer);
 			});
 		});
 	}
 
-	function revealFinalJeopardyPlayer(index, playerNamesArray, winnerPlayer, necessaryAnswer) {
+	function formatWinnerNames(winners) {
+		if (!winners || !winners.length) {
+			return '';
+		}
+		if (winners.length === 1) {
+			return winners[0].playerName;
+		}
+		if (winners.length === 2) {
+			return winners[0].playerName + ' and ' + winners[1].playerName;
+		}
+		var names = [];
+		var i;
+		for (i = 0; i < winners.length - 1; i++) {
+			names.push(winners[i].playerName);
+		}
+		return names.join(', ') + ', and ' + winners[winners.length - 1].playerName;
+	}
+
+	function revealFinalJeopardyPlayer(index, playerNamesArray, winners, necessaryAnswer) {
 		if (index >= playerNamesArray.length) {
-			showFinalJeopardyResults(winnerPlayer, necessaryAnswer);
+			showFinalJeopardyResults(winners, necessaryAnswer);
 			return;
 		}
 
@@ -1270,7 +1299,7 @@ $(document).ready(function() {
 							revealFinalJeopardyPlayer(
 								index + 1,
 								playerNamesArray,
-								winnerPlayer,
+								winners,
 								necessaryAnswer
 							);
 						}, 1800);
@@ -1280,13 +1309,13 @@ $(document).ready(function() {
 		}, 2000);
 	}
 
-	function showFinalJeopardyResults(winnerPlayer, necessaryAnswer) {
+	function showFinalJeopardyResults(winners, necessaryAnswer) {
 		$('#player_container').fadeOut('fast', function () {
 			$('#player_container').css('display', 'none');
 			$('.player_display .secure_player_container').empty();
 			$('.player_display').hide();
 
-			function buildFinalStandingsListHtml() {
+			function buildStandings() {
 				var standings = [];
 				var i;
 				for (i = 0; i < playerNames.length; i++) {
@@ -1302,7 +1331,12 @@ $(document).ready(function() {
 				standings.sort(function (a, b) {
 					return b.score - a.score;
 				});
+				return standings;
+			}
+
+			function buildFinalStandingsListHtml(standings) {
 				var html = '<ol>';
+				var i;
 				for (i = 0; i < standings.length; i++) {
 					html +=
 						'<li>' +
@@ -1316,8 +1350,9 @@ $(document).ready(function() {
 			}
 
 			function announceWinnerAndScores() {
-				var standingsList = buildFinalStandingsListHtml();
-				if (!winnerPlayer) {
+				var standings = buildStandings();
+				var standingsList = buildFinalStandingsListHtml(standings);
+				if (!winners || !winners.length) {
 					$('#message_overlay')
 						.html('<div><h2>FINAL RESULTS</h2>' + standingsList + '</div>')
 						.fadeIn('slow');
@@ -1327,19 +1362,33 @@ $(document).ready(function() {
 					return;
 				}
 
-				messageToVoice(
-					'Todays winner is ' +
-						winnerPlayer.playerName +
-						' with ' +
-						winnerPlayer.score +
-						', congratulations!  See you next time.',
-					false
-				);
+				var winnerNames = formatWinnerNames(winners);
+				var winningScore = winners[0].score;
+				var isTie = winners.length > 1;
+				var headline = isTie
+					? 'It\'s a tie!'
+					: 'You win ' + winners[0].playerName + '!';
+				var voiceLine = isTie
+					? 'We have a tie between ' +
+					  winnerNames +
+					  ' with ' +
+					  winningScore +
+					  ', congratulations!  See you next time.'
+					: 'Todays winner is ' +
+					  winnerNames +
+					  ' with ' +
+					  winningScore +
+					  ', congratulations!  See you next time.';
+
+				messageToVoice(voiceLine, false);
 				$('#message_overlay')
 					.html(
-						'<div><h2>You win ' +
-							$('<div>').text(winnerPlayer.playerName).html() +
-							'!</h2>' +
+						'<div><h2>' +
+							$('<div>').text(headline).html() +
+							'</h2>' +
+							(isTie
+								? '<p>' + $('<div>').text(winnerNames).html() + '</p>'
+								: '') +
 							standingsList +
 							'</div>'
 					)
@@ -1347,8 +1396,13 @@ $(document).ready(function() {
 				jeopardyIntroMusic.volume = 1;
 				playSound(jeopardyIntroMusic);
 				socket.emit('game over', {
-					winningPlayerName: winnerPlayer.playerName,
-					winningPlayerScore: winnerPlayer.score,
+					winningPlayerName: winners[0].playerName,
+					winningPlayerScore: winningScore,
+					winningPlayerNames: winners.map(function (w) {
+						return w.playerName;
+					}),
+					isTie: isTie,
+					standings: standings,
 				});
 				setTimeout(function () {
 					socket.emit('fetch high scores');
@@ -2302,40 +2356,6 @@ $(document).ready(function() {
 			}
 			return;
 		}
-        /*var arr = [];
-        var element = this;
-        var txt = message;
-        var voices = window.speechSynthesis.getVoices();
-        var u;
-        var t;
-
-        console.log("MESSAGE TO VOICE STRING: " + message);
-        while (txt.length > 0) {
-            arr.push(txt.match(pattRegex)[0]);
-            txt = txt.substring(arr[arr.length - 1].length);
-        }
-        $.each(arr, function () {
-            u = new SpeechSynthesisUtterance(this.trim());
-            u.voice = voices[3]; // Note: some voices don't support altering params
-			u.rate = 0.9; // 0.1 to 10
-            window.speechSynthesis.speak(u);
-        });
-
-        if (needsCallback)
-		{
-			u.onend = function (event) {
-			    t = event.timeStamp - t;
-			    console.log(event.timeStamp);
-			    console.log((t / 1000) + " seconds");
-			    callback();
-			};
-		}
-		*/
-    	/*var msg = new SpeechSynthesisUtterance(message);
-    	var voices = window.speechSynthesis.getVoices();
-		msg.voice = voices[3]; // Note: some voices don't support altering params
-		msg.rate = 0.9; // 0.1 to 10
-		window.speechSynthesis.speak(msg);*/
 
 		var utterThis = new SpeechSynthesisUtterance(message);
 		var narrationVoice = getHostNarrationVoice();
@@ -2349,11 +2369,28 @@ $(document).ready(function() {
 		utterThis.rate = 0.9;
 		synth.speak(utterThis);
 
-		if (needsCallback)
+		if (needsCallback && typeof callback === 'function')
 		{
-			utterThis.onend = function (event) {
-			    callback();
+			var called = false;
+			function once() {
+				if (called) {
+					return;
+				}
+				called = true;
+				callback();
+			}
+			utterThis.onend = function () {
+			    once();
 			};
+			utterThis.onerror = function () {
+				once();
+			};
+			/* speechSynthesis.onend is unreliable in some browsers; always failsafe */
+			var failsafeMs = Math.min(
+				20000,
+				Math.max(8000, String(message || '').length * 80)
+			);
+			setTimeout(once, failsafeMs);
 		}
     }
 

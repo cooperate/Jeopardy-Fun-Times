@@ -24,6 +24,74 @@ ensureGameHighScoreFile(config.paths.gameHighScore);
 /** code (uppercase) -> per-room game state */
 var gameRooms = new Map();
 
+/** How long players have to submit a Final Jeopardy wager before defaults are applied. */
+var FINAL_JEOPARDY_WAGER_TIMEOUT_MS = 45000;
+
+function getMaxFinalJeopardyWager(score) {
+	score = parseInt(score, 10);
+	if (isNaN(score)) {
+		score = 0;
+	}
+	if (score >= 1000) {
+		return score;
+	}
+	return 1000;
+}
+
+function clampFinalJeopardyWager(bet, score) {
+	var n = parseInt(bet, 10);
+	if (isNaN(n) || n < 0) {
+		n = 0;
+	}
+	var max = getMaxFinalJeopardyWager(score);
+	if (n > max) {
+		n = max;
+	}
+	return n;
+}
+
+function clearFinalJeopardyWagerTimer(room) {
+	if (room && room.finalJeopardyWagerTimer) {
+		clearTimeout(room.finalJeopardyWagerTimer);
+		room.finalJeopardyWagerTimer = null;
+	}
+}
+
+function allPlayersHaveFinalJeopardyBet(room) {
+	for (var playerName in room.players) {
+		if (!room.finalJeopardyBet[playerName]) {
+			return false;
+		}
+	}
+	return Object.keys(room.players).length > 0;
+}
+
+function defaultMissingFinalJeopardyWagers(room) {
+	room.finalJeopardyWagerTimer = null;
+	if (!room.finalJeopardyWageringPhase || room.finalJeopardyAnswerPhase) {
+		return;
+	}
+	var missing = false;
+	for (var playerName in room.players) {
+		if (room.finalJeopardyBet[playerName]) {
+			continue;
+		}
+		missing = true;
+		room.finalJeopardyBet[playerName] = {
+			playerName: playerName,
+			bet: 0,
+			autoDefaulted: true,
+		};
+		emitGame(room.code, 'final jeopardy response', {
+			playerName: playerName,
+			bet: 0,
+		});
+	}
+	if (missing) {
+		emitPlayers(room.code, 'final jeopardy wager timed out');
+	}
+}
+
 const app = express();
 const http = require('http').Server(app);
 const io = require('socket.io')(http);
@@ -395,6 +463,7 @@ gameSpc.on('connection', function (socket) {
 		r.newGameCounter = 0;
 		r.finalJeopardyWageringPhase = false;
 		r.finalJeopardyAnswerPhase = false;
+		clearFinalJeopardyWagerTimer(r);
 		emitPlayers(r.code, 'new game');
 		emitGame(r.code, 'new game', r.gameData);
 	});
@@ -422,6 +491,7 @@ gameSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
+		clearFinalJeopardyWagerTimer(r);
 		r.finalJeopardyAnswerPhase = true;
 		r.finalJeopardyWageringPhase = false;
 		emitPlayers(r.code, 'open response final jeopardy', r.questions['FJ_0_0']._question);
@@ -524,6 +594,11 @@ gameSpc.on('connection', function (socket) {
 			return;
 		}
 		r.finalJeopardyWageringPhase = true;
+		r.finalJeopardyAnswerPhase = false;
+		clearFinalJeopardyWagerTimer(r);
+		r.finalJeopardyWagerTimer = setTimeout(function () {
+			defaultMissingFinalJeopardyWagers(r);
+		}, FINAL_JEOPARDY_WAGER_TIMEOUT_MS);
 		emitPlayers(r.code, 'final jeopardy bid', r.questions['FJ_0_0']._category);
 	});
 
@@ -540,11 +615,31 @@ gameSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
-		fs.appendFileSync(
-			gameHighScore,
-			'\n' + winningPlayerData.winningPlayerName + ',' + winningPlayerData.winningPlayerScore
-		);
-		emitPlayers(r.code, 'game over', winningPlayerData.winningPlayerName);
+		var winnerNames = [];
+		var winningScore = 0;
+		if (winningPlayerData && Array.isArray(winningPlayerData.winningPlayerNames)) {
+			winnerNames = winningPlayerData.winningPlayerNames.slice();
+			winningScore = parseInt(winningPlayerData.winningPlayerScore, 10) || 0;
+		} else if (winningPlayerData && winningPlayerData.winningPlayerName) {
+			winnerNames = [winningPlayerData.winningPlayerName];
+			winningScore = parseInt(winningPlayerData.winningPlayerScore, 10) || 0;
+		}
+		var wi;
+		for (wi = 0; wi < winnerNames.length; wi++) {
+			fs.appendFileSync(
+				gameHighScore,
+				'\n' + winnerNames[wi] + ',' + winningScore
+			);
+		}
+		emitPlayers(r.code, 'game over', {
+			winningPlayerName: winnerNames[0] || '',
+			winningPlayerNames: winnerNames,
+			winningPlayerScore: winningScore,
+			isTie: winnerNames.length > 1,
+			standings: Array.isArray(winningPlayerData.standings)
+				? winningPlayerData.standings
+				: [],
+		});
 	});
 
 	socket.on('fetch high scores', function () {
@@ -732,6 +827,7 @@ gameSpc.on('connection', function (socket) {
 			r.finalJeopardyCheck = false;
 			r.finalJeopardyWageringPhase = false;
 			r.finalJeopardyAnswerPhase = false;
+			clearFinalJeopardyWagerTimer(r);
 			r.finalJeopardyBet = {};
 			r.isSecondRound = false;
 			r.roundTimer = ROUND_TIME;
@@ -1038,6 +1134,12 @@ playerSpc.on('connection', function (socket) {
 			answer: '',
 			buzzedInFJ: false,
 		});
+		emitPlayers(r.code, 'score update', {
+			score: r.players[playerName].score,
+			playerName: playerName,
+			correct: false,
+			finalJeopardy: true,
+		});
 	});
 
 	socket.on('answer selection', function (answer) {
@@ -1076,11 +1178,28 @@ playerSpc.on('connection', function (socket) {
 				bet: bet.betValue,
 			});
 		} else {
-			r.finalJeopardyBet[bet.playerName] = { playerName: bet.playerName, bet: bet.betValue };
+			if (!r.finalJeopardyWageringPhase || r.finalJeopardyAnswerPhase) {
+				return;
+			}
+			if (r.finalJeopardyBet[bet.playerName]) {
+				return;
+			}
+			var player = r.players[bet.playerName];
+			if (!player) {
+				return;
+			}
+			var clampedBet = clampFinalJeopardyWager(bet.betValue, player.score);
+			r.finalJeopardyBet[bet.playerName] = {
+				playerName: bet.playerName,
+				bet: clampedBet,
+			};
 			emitGame(r.code, 'final jeopardy response', {
 				playerName: bet.playerName,
-				bet: bet.betValue,
+				bet: clampedBet,
 			});
+			if (allPlayersHaveFinalJeopardyBet(r)) {
+				clearFinalJeopardyWagerTimer(r);
+			}
 		}
 	});
 
@@ -1156,6 +1275,11 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 			}
 
 			if (finalJeopardy) {
+				var fbEarly = room.finalJeopardyBet[playerName];
+				if (!fbEarly || fbEarly.scored) {
+					emitGame(room.code, 'answer ai judging end');
+					return;
+				}
 				value = 0;
 			}
 
@@ -1218,6 +1342,12 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 					correct: correct,
 					buzzedInFJ: true,
 				});
+				emitPlayers(room.code, 'score update', {
+					score: score,
+					playerName: playerName,
+					correct: correct,
+					finalJeopardy: true,
+				});
 			}
 		})
 		.catch(function (err) {
@@ -1238,6 +1368,12 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 						playerName: playerName,
 						correct: false,
 						buzzedInFJ: true,
+					});
+					emitPlayers(room.code, 'score update', {
+						score: room.players[playerName].score,
+						playerName: playerName,
+						correct: false,
+						finalJeopardy: true,
 					});
 				}
 			}

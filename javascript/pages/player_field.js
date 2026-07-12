@@ -653,10 +653,16 @@ $(document).ready(function() {
 
 	   socket.on('final jeopardy time out', function(){
 	   		console.log("FJ TIME OUT");
-	   		postScreenMessage("Please look at the game board.", false, 0);
 	   		$("#answer_field").blur();
+	   		switchBuzzer(true);
 	   		if (!finalJeopardyAnswered){
 	   			socket.emit('player no answer final jeopardy', playerName);
+	   		} else {
+	   			postScreenMessage(
+	   				'Your Final Jeopardy score: $' + playerScore + '. Watch the results on screen.',
+	   				false,
+	   				0
+	   			);
 	   		}
 	   });
 
@@ -952,6 +958,12 @@ $(document).ready(function() {
 	 	{
 	 		$('#player_score').html(score.score);
 	 		playerScore= score.score;
+	 		if (score.finalJeopardy) {
+	 			var fjMsg = score.correct
+	 				? 'Correct! Your score is now $' + score.score + '.'
+	 				: 'Incorrect. Your score is now $' + score.score + '.';
+	 			postScreenMessage(fjMsg, false, 0);
+	 		}
 	 	}
 	 	if (!finalJeopardyCheck)
 	 	{
@@ -997,6 +1009,11 @@ $(document).ready(function() {
 		staticMessageOff();
 	});
 
+	socket.on('final jeopardy wager timed out', function(){
+		$(".player_bet_field").css("display", "none");
+		postScreenMessage("Wager time is up — please look at the screen.", false, 0);
+	});
+
 	socket.on('open response final jeopardy', function(question){
 		$("#question_revealed").html(question);
 		scheduleQuestionRevealedTextFit();
@@ -1005,23 +1022,66 @@ $(document).ready(function() {
 		staticMessageOff();
 	});
 
-	socket.on('game over', function(winningPlayerName){
-		if (winningPlayerName == playerName)
-		{
-			postScreenMessage("You're todays champion, congratulations!", false, 0);
-			setTimeout(function(){
-				SimpleModal.confirm({
-				  title: 'Play Again?',
-				  text: "Play again with the current contestants.",
-				  confirmText: 'Play Again!',
-				  cancelText: 'Cancel'
-				}).then(function (confirmed) {
-				   if (confirmed) {
-					   socket.emit('new game');
-				   }
-				});
-			}, 8000);
+	socket.on('game over', function(gameOverData){
+		var winnerNames = [];
+		var winningScore = 0;
+		var isTie = false;
+		var standings = [];
+		var i;
+
+		if (typeof gameOverData === 'string') {
+			winnerNames = gameOverData ? [gameOverData] : [];
+		} else if (gameOverData && typeof gameOverData === 'object') {
+			if (Array.isArray(gameOverData.winningPlayerNames)) {
+				winnerNames = gameOverData.winningPlayerNames.slice();
+			} else if (gameOverData.winningPlayerName) {
+				winnerNames = [gameOverData.winningPlayerName];
+			}
+			winningScore = parseInt(gameOverData.winningPlayerScore, 10) || 0;
+			isTie = !!gameOverData.isTie || winnerNames.length > 1;
+			if (Array.isArray(gameOverData.standings)) {
+				standings = gameOverData.standings;
+			}
 		}
+
+		for (i = 0; i < standings.length; i++) {
+			if (standings[i].name === playerName) {
+				playerScore = parseInt(standings[i].score, 10) || 0;
+				$('#player_score').html(playerScore);
+				break;
+			}
+		}
+
+		var isWinner = winnerNames.indexOf(playerName) !== -1;
+		var endMsg;
+		if (isWinner && isTie) {
+			endMsg = "You're co-champions! Tied at $" + winningScore + ".";
+		} else if (isWinner) {
+			endMsg = "You're today's champion, congratulations!";
+		} else if (winnerNames.length) {
+			endMsg =
+				(isTie ? 'Tied winners: ' : 'Winner: ') +
+				winnerNames.join(' & ') +
+				' with $' +
+				winningScore +
+				'. Nice game!';
+		} else {
+			endMsg = 'Game over — nice playing!';
+		}
+		postScreenMessage(endMsg, false, 0);
+
+		setTimeout(function(){
+			SimpleModal.confirm({
+			  title: 'Play Again?',
+			  text: "Play again with the current contestants.",
+			  confirmText: 'Play Again!',
+			  cancelText: 'Cancel'
+			}).then(function (confirmed) {
+			   if (confirmed) {
+				   socket.emit('new game');
+			   }
+			});
+		}, 8000);
 	});
 
 	socket.on('new game', function(){
@@ -1119,8 +1179,8 @@ $(document).ready(function() {
 				});
 	 			 return false;
 	 	}
-	 	value = parseInt(value);
-	 	var validationObject = validateBet(value);
+	 value = parseInt(value);
+	 	var validationObject = validateBet(value, finalJeopardyCheck);
 	 	if (validationObject.isValid)
 	 	{	
 	 		socket.emit('bet selection', {betValue: value, questionId: curQuestionId, playerName: playerName, finalJeopardyCheck: finalJeopardyCheck}); //final jeopardy check is only triggered after final jeopardy segment begins (not to be confused with final jeopardy triggering ie. the game timer runs out while a daily double occurs)
@@ -1153,60 +1213,49 @@ $(document).ready(function() {
 		}
 	});
 
-	 function validateBet(bet)
+	 function getMaxWager(score)
 	 {
-	 	if (!isNaN(bet))
-		{
-			if (bet<0)
-		 	{
-		 		return {message: "You can't make a negative bet.", isValid: false};
-		 	}
-		 	if (bet >= 0 && bet <5)
-		 	{
-		 		return {message: "The minimum bet is 5.", isValid: false};
-		 	}
-			if(bet>playerScore && playerScore>=0)
-		 	{
-		 		if (bet<5)
-				{
-					return{message: "The minimum bet is 5.", isValid: false};
-				}
-		 		else if (bet>1000 && playerScore<1000)
-		 		{
-		 			return {message: "Your score is less than the Jeopardy maximum but you're still not in the negatives.  You can wager up to 1000.  Keeping that in mind, make a new bet.", isValid: false};
-		 		}
+	 	score = parseInt(score, 10);
+	 	if (isNaN(score)) {
+	 		score = 0;
+	 	}
+	 	if (score >= 1000) {
+	 		return score;
+	 	}
+	 	return 1000;
+	 }
 
-		 		else
-		 		{
-		 			return {message: "Valid.", isValid: true};
-		 		}
-		 	}
-			if (playerScore < 0)
-			{
-				if (bet>playerScore && bet>1000)
-				{
-					return {message: "You are not doing well, bid up to 1000 as a sign of our affection.", isValid: false};
-				}
-
-				if (bet<5)
-				{
-					return{message: "The minimum bet is 5.", isValid: false};
-				}
-
-				else
-				{
-					return {message: "Valid", isValid: true};
-				}
-			}
-			else
-			{
-				return {message: "Valid", isValid: true};
-			}
-		}
-	 	else
+	 function validateBet(bet, isFinalJeopardy)
+	 {
+	 	if (isNaN(bet))
 	 	{
 	 		return {message: "Please enter a number.", isValid: false};
 	 	}
+	 	bet = parseInt(bet, 10);
+	 	if (bet < 0)
+	 	{
+	 		return {message: "You can't make a negative bet.", isValid: false};
+	 	}
+	 	var minBet = isFinalJeopardy ? 0 : 5;
+	 	if (bet < minBet)
+	 	{
+	 		return {message: "The minimum bet is " + minBet + ".", isValid: false};
+	 	}
+	 	var maxBet = getMaxWager(playerScore);
+	 	if (bet > maxBet)
+	 	{
+	 		if (playerScore >= 1000) {
+	 			return {
+	 				message: "You can only wager up to your score ($" + maxBet + ").",
+	 				isValid: false
+	 			};
+	 		}
+	 		return {
+	 			message: "You can wager up to $1000.",
+	 			isValid: false
+	 		};
+	 	}
+	 	return {message: "Valid", isValid: true};
 	 }
 
 	//TODO: this function will post a message overlay on top of the board that will fade out.  handy for any alerts
