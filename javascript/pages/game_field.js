@@ -137,9 +137,6 @@ $(document).ready(function() {
 		hostSoundMutedStored === null ? true : hostSoundMutedStored === '1';
 	/* Each full page load needs one click on the sound control before the browser allows audio */
 	var hostPageAudioPrimed = false;
-	/** When TTS is skipped (muted or sound not yet enabled), defer voice-completion callbacks so answer/reveal screens are not instant */
-	var HOST_SILENT_VOICE_HOLD_MS = 4000;
-
 	var skipGameDataAfterHostRestore = false;
 	var hostRestoreSuppress = false;
 
@@ -151,6 +148,24 @@ $(document).ready(function() {
 	var hostSpeechCurrentJob = null;
 	var hostSpeechFailsafeTimer = null;
 	var hostSpeechJobSeq = 0;
+
+	function hostSpeechSynthesisSupported() {
+		return !!(
+			typeof window !== 'undefined' &&
+			window.speechSynthesis &&
+			typeof window.SpeechSynthesisUtterance === 'function'
+		);
+	}
+
+	/** True only when we will actually speak (API present, sound on, audio primed). */
+	function hostCanSpeak() {
+		return (
+			hostSpeechSynthesisSupported() &&
+			!!synth &&
+			!hostSoundMuted &&
+			hostPageAudioPrimed
+		);
+	}
 
 	function clearHostSpeechFailsafe() {
 		if (hostSpeechFailsafeTimer) {
@@ -229,16 +244,9 @@ $(document).ready(function() {
 			pumpHostSpeechQueue();
 		}
 
-		if (hostSoundMuted || !hostPageAudioPrimed) {
-			hostSpeechFailsafeTimer = setTimeout(
-				finishJob,
-				HOST_SILENT_VOICE_HOLD_MS
-			);
-			return;
-		}
-
-		if (!synth) {
-			finishJob();
+		/* No usable TTS — do not simulate speech timing; advance immediately */
+		if (!hostCanSpeak()) {
+			setTimeout(finishJob, 0);
 			return;
 		}
 
@@ -274,8 +282,8 @@ $(document).ready(function() {
 	}
 
 	/**
-	 * Speak through a FIFO queue. Callbacks run only after this line finishes
-	 * (or its failsafe), so game steps stay in sync with narration.
+	 * Speak through a FIFO queue when TTS is available. If speech synthesis is
+	 * unavailable / muted / not primed, callbacks run on the next tick with no queue wait.
 	 * options.interrupt — cancel current/queued speech before enqueuing.
 	 */
 	function messageToVoice(message, needsCallback, callback, options) {
@@ -283,6 +291,15 @@ $(document).ready(function() {
 		if (options.interrupt) {
 			flushHostSpeech();
 		}
+
+		if (!hostCanSpeak()) {
+			flushHostSpeech();
+			if (needsCallback && typeof callback === 'function') {
+				setTimeout(callback, 0);
+			}
+			return;
+		}
+
 		hostSpeechQueue.push({
 			id: ++hostSpeechJobSeq,
 			message: String(message == null ? '' : message),
@@ -2393,6 +2410,7 @@ $(document).ready(function() {
 		);
 		updateHostSoundToggleUi();
 		if (hostSoundMuted) {
+			flushHostSpeech();
 			hostPauseAllGameAudio();
 		}
 	});
