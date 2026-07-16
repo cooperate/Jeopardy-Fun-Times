@@ -6,8 +6,10 @@ $(document).ready(function () {
 			.replace(/[^A-Z0-9]/g, '');
 	}
 
-	$('#host_new_room_btn').on('click', function () {
-		fetch('/api/rooms/new')
+	$('.host-mode-card').on('click', function () {
+		var mode = String($(this).data('mode') || 'standard');
+		$('.host-mode-card').prop('disabled', true);
+		fetch('/api/rooms/new?mode=' + encodeURIComponent(mode))
 			.then(function (res) {
 				return res.json();
 			})
@@ -24,6 +26,7 @@ $(document).ready(function () {
 				}
 			})
 			.catch(function () {
+				$('.host-mode-card').prop('disabled', false);
 				SimpleModal.alert({
 					title: 'Could not create room',
 					text: 'Check that the server is running.',

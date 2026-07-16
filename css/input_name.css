@@ -26,7 +26,7 @@ body,html{width:100%;height:100%;}
  position:relative;
  margin:auto;}
 
-#login_name{
+#login_name, #login_team_name{
   display:block;
     width: 100%;
     padding: 15px 0 15px 0px;
@@ -46,9 +46,32 @@ body,html{width:100%;height:100%;}
     position: relative;
     font-size: 13px;
 }
-#login_name:focus{
+#login_name:focus, #login_team_name:focus{
     text-indent: 12px;
     box-shadow: inset 0 -5px 45px rgba(100,100,100,0.4), 0 1px 1px rgba(255,255,255,0.2);
+}
+
+.player-mode-label {
+  margin: 0 0 18px;
+  color: #ffea00;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.team-name-field {
+  margin-top: 18px;
+  text-align: left;
+}
+.team-name-field label {
+  margin-bottom: 8px;
+}
+.team-name-field p {
+  margin: 7px 2px 0;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 label{

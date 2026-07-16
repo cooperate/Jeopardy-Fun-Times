@@ -2,6 +2,7 @@
 //ipads getting blocked out of answering
 
 const express = require('express');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const config = require('./lib/config');
@@ -9,13 +10,14 @@ const { ensureGameHighScoreFile } = require('./lib/ensureDataFiles');
 const { Player, Question } = require('./lib/models');
 const { parseMediaType, parseAnswer } = require('./lib/parsers');
 const { evaluateAnswer } = require('./lib/evaluateAnswer');
+const { searchCommonsImage } = require('./lib/wikimediaImageSearch');
 const {
 	createGameRoom,
 	normalizeRoomCode: normRoom,
 	generateUniqueRoomCode,
+	normalizeGameMode,
 	ROUND_TIME,
-	MIN_PLAYERS_TO_START,
-	MAX_PLAYERS_PER_ROOM,
+	OPTIONS_VOTE_TIMEOUT_MS,
 } = require('./lib/gameRoom');
 const jarchiveDynamic = require('./lib/jarchiveDynamicGame');
 
@@ -169,7 +171,7 @@ app.get('/', function (req, res) {
   <p>Open these URLs in the browser (same machine or same LAN, depending on how you run the server).</p>
   <ul>
     <li><strong>Host</strong>: <a href="/game"><code>/game</code></a> — create a room or enter a code; you are sent to <code>/game/ROOM</code> for the board.</li>
-    <li><strong>Players</strong>: <a href="/home"><code>/home</code></a> to enter the room code, or open <code>/player?room=ROOM</code> directly. Each room supports 3–5 players (at least three are required before setup voting begins).</li>
+    <li><strong>Players</strong>: <a href="/home"><code>/home</code></a> to enter the room code, or open <code>/player?room=ROOM</code> directly. Standard supports 3 players, Team supports 3 teams of up to 2, and Open supports 3–12 players.</li>
   </ul>
   <p>Start the server with <code>npm start</code> (or <code>node app.js</code>), then use the links above.</p>
 </body>
@@ -195,8 +197,9 @@ app.get('/game/:roomCode', function (req, res) {
 
 app.get('/api/rooms/new', function (req, res) {
 	var code = generateUniqueRoomCode(gameRooms);
-	gameRooms.set(code, createGameRoom(code));
-	res.json({ roomCode: code });
+	var mode = normalizeGameMode(req.query.mode);
+	gameRooms.set(code, createGameRoom(code, mode));
+	res.json({ roomCode: code, mode: mode });
 });
 
 app.get('/player', function (req, res) {
@@ -318,6 +321,9 @@ function applyQuestionSelection(room, questionId) {
 	room.clueInProgress = true;
 	room.playerBuzzerUnlocked = false;
 	room.buzzedInPlayerName = undefined;
+	room.buzzedInMemberName = undefined;
+	room.buzzedInClientId = undefined;
+	room.dailyDoubleResponderClientId = undefined;
 	stopTimer(room.buzzedInTimer);
 	room.buzzedInTimer = null;
 	room.buzzedInTimerCount = room.answerTime;
@@ -383,6 +389,8 @@ function buildHostSnapshot(room) {
 			_mediaLink: q._mediaLink,
 			_mediaType: q._mediaType,
 			_mediaOriginalUrl: q._mediaOriginalUrl || '',
+			_mediaFallback: !!q._mediaFallback,
+			_mediaAttribution: q._mediaAttribution || null,
 			_round: q._round,
 		};
 	}
@@ -401,11 +409,17 @@ function buildHostSnapshot(room) {
 			score: room.players[pname].score,
 			isActive: room.players[pname].active,
 			givenAnswer: room.players[pname].givenAnswer,
+			members: Object.keys(room.contestantMembers[pname] || {}).map(function (clientId) {
+				return room.contestantMembers[pname][clientId];
+			}),
 		});
 	}
 	var ap = getPlayerActive(room);
 	return {
 		gameActive: room.gameState.active === true,
+		mode: room.mode,
+		modeConfig: room.modeConfig,
+		setupVotingOpen: room.setupVotingOpen,
 		airdate: room.airdate,
 		answerTime: room.answerTime,
 		roundTimer: room.roundTimer,
@@ -458,20 +472,37 @@ function download(uri, filename, callback, type) {
 			callback(false);
 			return;
 		}
-		fetch(urlsToTry[i])
+		var controller = new AbortController();
+		var timeout = setTimeout(function () {
+			controller.abort();
+		}, 8000);
+		fetch(urlsToTry[i], { signal: controller.signal })
 			.then(function (res) {
 				if (!res.ok) {
 					throw new Error('HTTP ' + res.status + ' ' + res.statusText);
 				}
-				console.log('content-type:', res.headers.get('content-type'));
-				console.log('content-length:', res.headers.get('content-length'));
+				var contentType = String(res.headers.get('content-type') || '').toLowerCase();
+				var contentLength = parseInt(res.headers.get('content-length'), 10);
+				console.log('content-type:', contentType);
+				console.log('content-length:', contentLength);
+				if (type === 'image' && contentType && contentType.indexOf('image/') !== 0) {
+					throw new Error('Expected image, received ' + contentType);
+				}
+				if (!isNaN(contentLength) && contentLength > 10 * 1024 * 1024) {
+					throw new Error('Media exceeds 10 MB limit');
+				}
 				return res.arrayBuffer();
 			})
 			.then(function (buf) {
+				if (buf.byteLength > 10 * 1024 * 1024) {
+					throw new Error('Media exceeds 10 MB limit');
+				}
+				clearTimeout(timeout);
 				fs.writeFileSync(destPath, Buffer.from(buf));
 				callback(true);
 			})
 			.catch(function (err) {
+				clearTimeout(timeout);
 				console.error(
 					'DOWNLOAD failed:',
 					urlsToTry[i],
@@ -522,6 +553,28 @@ gameSpc.on('connection', function (socket) {
 		console.error('buildHostSnapshot failed', err);
 		socket.emit('host state snapshot', { gameActive: false });
 	}
+
+	socket.on('host start setup', function () {
+		var r = getRoomFromSocket(socket);
+		if (
+			!r ||
+			r.gameState.active ||
+			r.hostGameOptionsSelected ||
+			objectLength(r.players) < r.modeConfig.minContestants
+		) {
+			return;
+		}
+		r.setupVotingOpen = true;
+		r.registrationClosed = true;
+		startOptionsVoteTimer(r);
+		emitPlayers(r.code, 'option select new');
+		emitPlayers(r.code, 'game options vote progress', {
+			received: objectLength(r.optionVotes),
+			needed: objectLength(r.players),
+		});
+		emitOptionsVoteTimer(r);
+		emitGame(r.code, 'setup voting started');
+	});
 
 	socket.on('host request new game', function () {
 		var r = getRoomFromSocket(socket);
@@ -903,6 +956,7 @@ gameSpc.on('connection', function (socket) {
 			r.finalJeopardyAllWagersEmitted = false;
 			clearFinalJeopardyWagerTimer(r);
 			r.finalJeopardyBet = {};
+			r.finalJeopardyAnswerSubmitted = {};
 			r.isSecondRound = false;
 			r.roundTimer = ROUND_TIME;
 			r.lastPlayerBoardMarkup = '';
@@ -935,6 +989,8 @@ gameSpc.on('connection', function (socket) {
 		}
 		emitPlayers(r.code, 'buzzer pressed', {
 			playerName: nameData.playerName,
+			memberName: nameData.memberName || nameData.playerName,
+			clientId: nameData.clientId,
 			questionId: nameData.questionId,
 		});
 	});
@@ -957,28 +1013,76 @@ playerSpc.on('connection', function (socket) {
 	var room = gameRooms.get(code);
 
 	console.log('player connected.');
+	socket.emit('room configuration', {
+		code: room.code,
+		mode: room.mode,
+		label: room.modeConfig.label,
+		minContestants: room.modeConfig.minContestants,
+		maxContestants: room.modeConfig.maxContestants,
+		maxMembersPerContestant: room.modeConfig.maxMembersPerContestant,
+	});
 
-	socket.on('login name', function (name) {
-		name = String(name || '').trim().toUpperCase();
-		if (!name) {
+	socket.on('login name', function (login) {
+		var legacyName = typeof login === 'string' ? login : '';
+		login = login && typeof login === 'object' ? login : {};
+		var memberName = String(login.memberName || legacyName || '').trim().toUpperCase().slice(0, 24);
+		var contestantName =
+			room.mode === 'team'
+				? String(login.teamName || '').trim().toUpperCase().slice(0, 24)
+				: memberName;
+		var clientId = String(login.clientId || socket.id).trim().slice(0, 80);
+		if (!memberName || !contestantName || !clientId) {
+			socket.emit('player login rejected', {
+				message: room.mode === 'team' ? 'Enter both your name and a team name.' : 'Enter your name.',
+			});
 			return;
 		}
-		console.log('PLAYER LOGIN: ' + name);
-		socket.username = name;
-		playerConnectionBySocketId[socket.id] = { username: name, roomCode: code };
+		console.log('PLAYER LOGIN: ' + memberName + ' AS ' + contestantName);
+		socket.username = contestantName;
+		socket.contestantName = contestantName;
+		socket.memberName = memberName;
+		socket.clientId = clientId;
 
-		var existing = room.players[name];
+		var existing = room.players[contestantName];
+		var members = room.contestantMembers[contestantName] || {};
 		if (existing) {
-			console.log('PLAYER RECONNECT: ' + name);
+			var isKnownDevice = Object.prototype.hasOwnProperty.call(members, clientId);
+			if (
+				room.mode === 'team' &&
+				!isKnownDevice &&
+				Object.keys(members).length >= room.modeConfig.maxMembersPerContestant
+			) {
+				socket.emit('player login rejected', {
+					message: contestantName + ' already has two connected players.',
+				});
+				return;
+			}
+			if ((room.gameState.active === true || room.registrationClosed) && !isKnownDevice) {
+				socket.emit('player login rejected', {
+					message: 'This game has already started. Only previously joined devices can reconnect.',
+				});
+				return;
+			}
+			members[clientId] = memberName;
+			room.contestantMembers[contestantName] = members;
+			playerConnectionBySocketId[socket.id] = {
+				username: contestantName,
+				memberName: memberName,
+				clientId: clientId,
+				roomCode: code,
+			};
+			emitGame(room.code, 'roster update', buildHostSnapshot(room).players);
+			console.log('PLAYER RECONNECT/JOIN TEAM: ' + contestantName);
 			if (room.gameState.active === true) {
-				sendPlayerReconnectState(socket, name, room);
+				sendPlayerReconnectState(socket, contestantName, room);
 				if (room.finalJeopardyCheck && room.finalJeopardyWageringPhase) {
 					syncFinalJeopardyWagersToHost(room);
 				}
 				return;
 			}
 			if (
-				objectLength(room.players) >= MIN_PLAYERS_TO_START &&
+				room.setupVotingOpen &&
+				objectLength(room.players) >= room.modeConfig.minContestants &&
 				!room.hostGameOptionsSelected
 			) {
 				socket.emit('option select new');
@@ -986,8 +1090,9 @@ playerSpc.on('connection', function (socket) {
 					received: objectLength(room.optionVotes),
 					needed: objectLength(room.players),
 				});
+				emitOptionsVoteTimer(room);
 			} else {
-				socket.emit('wait for start game', name);
+				socket.emit('wait for start game', contestantName);
 			}
 			return;
 		}
@@ -999,38 +1104,60 @@ playerSpc.on('connection', function (socket) {
 			});
 			return;
 		}
-		if (objectLength(room.players) >= MAX_PLAYERS_PER_ROOM) {
+		if (room.registrationClosed) {
+			socket.emit('player login rejected', {
+				message: 'The host has started game setup, so this room is no longer accepting players.',
+			});
+			return;
+		}
+		if (objectLength(room.players) >= room.modeConfig.maxContestants) {
 			socket.emit('player room error', {
 				message:
 					'This room already has the maximum of ' +
-					MAX_PLAYERS_PER_ROOM +
-					' players.',
+					room.modeConfig.maxContestants +
+					(room.mode === 'team' ? ' teams.' : ' players.'),
 			});
 			return;
 		}
 
-		emitGame(room.code, 'login name', name);
-		if (room.playerJoinOrder.indexOf(name) === -1) {
-			room.playerJoinOrder.push(name);
+		if (room.playerJoinOrder.indexOf(contestantName) === -1) {
+			room.playerJoinOrder.push(contestantName);
 		}
-		room.players[name] = new Player(name);
+		room.players[contestantName] = new Player(contestantName);
+		room.contestantMembers[contestantName] = {};
+		room.contestantMembers[contestantName][clientId] = memberName;
+		playerConnectionBySocketId[socket.id] = {
+			username: contestantName,
+			memberName: memberName,
+			clientId: clientId,
+			roomCode: code,
+		};
+		emitGame(room.code, 'roster update', buildHostSnapshot(room).players);
 		console.log(room.players);
 		var playerTotal = objectLength(room.players);
 		var voteProgressPayload = {
 			received: objectLength(room.optionVotes),
 			needed: playerTotal,
 		};
-		if (playerTotal === MIN_PLAYERS_TO_START) {
+		if (
+			room.setupVotingOpen &&
+			playerTotal === room.modeConfig.minContestants
+		) {
+			startOptionsVoteTimer(room);
 			emitPlayers(room.code, 'option select new');
+			emitOptionsVoteTimer(room);
 		} else if (
-			playerTotal > MIN_PLAYERS_TO_START &&
+			room.setupVotingOpen &&
+			playerTotal > room.modeConfig.minContestants &&
 			!room.hostGameOptionsSelected
 		) {
+			startOptionsVoteTimer(room);
 			socket.emit('option select new');
 			socket.emit('game options vote progress', voteProgressPayload);
 			emitPlayers(room.code, 'game options vote progress', voteProgressPayload);
+			emitOptionsVoteTimer(room);
 		} else {
-			socket.emit('wait for start game', name);
+			socket.emit('wait for start game', contestantName);
 		}
 	});	
 
@@ -1061,56 +1188,18 @@ playerSpc.on('connection', function (socket) {
 			decade: normalizeOptionDecade(optionArray[1]),
 			episodeFilter: normalizeEpisodeFilterOption(optionArray[2]),
 		};
+		emitPlayers(r.code, 'contestant option vote recorded', socket.username);
 		var needed = objectLength(r.players);
 		var received = objectLength(r.optionVotes);
 		emitPlayers(r.code, 'game options vote progress', {
 			received: received,
 			needed: needed,
 		});
+		emitOptionsVoteTimer(r);
 		if (received < needed) {
 			return;
 		}
-		r.answerTime =
-			tallyMajorityOrNull(r.optionVotes, 'answerTime') || '20';
-		r.decade = tallyMajorityOrNull(r.optionVotes, 'decade') || '20s';
-		r.episodeFilter =
-			tallyMajorityOrNull(r.optionVotes, 'episodeFilter') || 'any';
-		r.hostGameOptionsSelected = true;
-		r.optionVotes = {};
-		emitPlayers(r.code, 'game setup loading');
-		emitGame(r.code, 'host game load status', {
-			phase: 'loading',
-			message: 'All votes in. Searching for a playable game…',
-		});
-		selectGameForRoom(r, function (returnValue) {
-			if (!returnValue || returnValue.game == null) {
-				console.error('selectGameForRoom: no game row returned');
-				r.hostGameOptionsSelected = false;
-				emitPlayers(r.code, 'game setup failed', {
-					message:
-						'No full game could be loaded. Try a different decade or set episode type to Any, or add more data to clues.db.',
-				});
-				emitGame(r.code, 'host game load status', {
-					phase: 'error',
-					message:
-						'No 61-clue game found. Try other votes or expand the database.',
-				});
-				return;
-			}
-			r.gameId = returnValue.game;
-			r.airdate = returnValue.airdate;
-			var tempDate = new Date(r.airdate);
-			r.airdate = formatPlayerOptionDate(tempDate);
-			appendPlayedGameIdToDisk(r.gameId);
-			console.log('GAME_ID: ' + r.gameId + ' AIRDATE ' + r.airdate);
-			emitGame(r.code, 'host game load status', {
-				phase: 'done',
-				message: '',
-			});
-			emitPlayers(r.code, 'answer time data', r.answerTime);
-			emitGame(r.code, 'answer time data', r.answerTime);
-			setGameDataNew(r);
-		});
+		finalizeGameOptionsVotes(r, 'complete');
 	});
 
 	socket.on('new game', function () {
@@ -1146,19 +1235,24 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('buzzer pressed', function (playerName) {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !socket.contestantName || !r.players[socket.contestantName]) {
 			return;
 		}
+		playerName = socket.contestantName;
 		console.log('BUZZER PRESSED BY: ' + playerName);
-		if (!r.buzzerFlipped) {
+		if (!r.buzzerFlipped && r.players[playerName].givenAnswer !== true) {
 			console.log('buzzer pressed inside buzzerflip check: ' + playerName);
 			r.buzzerFlipped = true;
 			r.playerBuzzerUnlocked = false;
 			stopTimer(r.questionTimer);
 			if (r.questionTimerCount > 0) {
 				r.buzzedInPlayerName = playerName;
+				r.buzzedInMemberName = socket.memberName || playerName;
+				r.buzzedInClientId = socket.clientId || socket.id;
 				emitGame(r.code, 'buzzer pressed', {
 					playerName: playerName,
+					memberName: r.buzzedInMemberName,
+					clientId: r.buzzedInClientId,
 					questionId: r.curQuestionId,
 				});
 				r.players[playerName].givenAnswer = true;
@@ -1191,9 +1285,10 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('player no answer final jeopardy', function (playerName) {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !socket.contestantName) {
 			return;
 		}
+		playerName = socket.contestantName;
 		var fb = r.finalJeopardyBet[playerName];
 		if (!fb || fb.scored) {
 			return;
@@ -1221,7 +1316,27 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('answer selection', function (answer) {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !answer || !socket.contestantName) {
+			return;
+		}
+		answer.playerName = socket.contestantName;
+		if (answer.finalJeopardyCheck) {
+			if (r.finalJeopardyAnswerSubmitted[answer.playerName]) {
+				return;
+			}
+			r.finalJeopardyAnswerSubmitted[answer.playerName] = socket.clientId;
+			emitPlayers(r.code, 'final jeopardy contestant answer locked', {
+				playerName: answer.playerName,
+				clientId: socket.clientId,
+			});
+		}
+		if (
+			!answer.finalJeopardyCheck &&
+			r.questions[answer.questionId] &&
+			!r.questions[answer.questionId]._dailyDouble &&
+			r.buzzedInClientId &&
+			socket.clientId !== r.buzzedInClientId
+		) {
 			return;
 		}
 		r.buzzerFlipped = false;
@@ -1238,13 +1353,23 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('bet selection', function (bet) {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !bet || !socket.contestantName) {
 			return;
 		}
+		bet.playerName = socket.contestantName;
 		if (!bet.finalJeopardyCheck) {
+			if (
+				r.dailyDoubleResponderClientId &&
+				r.dailyDoubleResponderClientId !== socket.clientId
+			) {
+				return;
+			}
+			r.dailyDoubleResponderClientId = socket.clientId;
 			r.questions[bet.questionId]._value = bet.betValue;
 			emitPlayers(r.code, 'daily double response', {
 				playerName: bet.playerName,
+				memberName: socket.memberName || bet.playerName,
+				clientId: socket.clientId,
 				questionId: bet.questionId,
 				question: r.questions[bet.questionId]._question,
 				isDailyDouble: true,
@@ -1253,6 +1378,8 @@ playerSpc.on('connection', function (socket) {
 				question: r.questions[bet.questionId]._question,
 				questionId: bet.questionId,
 				bet: bet.betValue,
+				playerName: bet.playerName,
+				memberName: socket.memberName || bet.playerName,
 			});
 		} else {
 			if (!r.finalJeopardyWageringPhase || r.finalJeopardyAnswerPhase) {
@@ -1272,6 +1399,11 @@ playerSpc.on('connection', function (socket) {
 				playerName: bet.playerName,
 				bet: clampedBet,
 			};
+			emitPlayers(r.code, 'final jeopardy contestant wager locked', {
+				playerName: bet.playerName,
+				clientId: socket.clientId,
+				bet: clampedBet,
+			});
 			emitGame(r.code, 'final jeopardy response', {
 				playerName: bet.playerName,
 				bet: clampedBet,
@@ -1591,16 +1723,108 @@ function setGameDataNew(room) {
   		});
 }
 
+var commonsImageSearchCache = new Map();
+
+function commonsImageExtension(mime) {
+	switch (mime) {
+		case 'image/png':
+			return '.png';
+		case 'image/gif':
+			return '.gif';
+		case 'image/webp':
+			return '.webp';
+		default:
+			return '.jpg';
+	}
+}
+
+function tryCommonsImageFallback(question, callback) {
+	var cacheKey = (
+		String(question.answer || '') +
+		'|' +
+		String(question.category || '')
+	)
+		.trim()
+		.toLowerCase();
+	var searchPromise = commonsImageSearchCache.get(cacheKey);
+	if (!searchPromise) {
+		searchPromise = searchCommonsImage(question, {
+			userAgent: config.wikimediaUserAgent,
+		}).catch(function (err) {
+			console.warn(
+				'Wikimedia image search failed for ' + question.questionId + ':',
+				err.message || err
+			);
+			return null;
+		});
+		commonsImageSearchCache.set(cacheKey, searchPromise);
+	}
+
+	searchPromise.then(function (result) {
+		if (!result) {
+			callback(false);
+			return;
+		}
+
+		var filename =
+			'commons-' +
+			crypto.createHash('sha256').update(result.imageUrl).digest('hex').slice(0, 24) +
+			commonsImageExtension(result.mime);
+		var localPath = '/temp-media/image/' + filename;
+		var diskPath = path.join(__dirname, 'temp-media', 'image', filename);
+		var alreadyHave = false;
+		try {
+			alreadyHave = fs.existsSync(diskPath) && fs.statSync(diskPath).size > 0;
+		} catch (err) {
+			alreadyHave = false;
+		}
+
+		function applyResult(ok) {
+			if (!ok) {
+				callback(false);
+				return;
+			}
+			question.mediaLink = localPath;
+			question.mediaType = 'image';
+			question._mediaFallback = true;
+			question._mediaAttribution = {
+				artist: result.artist,
+				license: result.license,
+				licenseUrl: result.licenseUrl,
+				sourceUrl: result.sourceUrl,
+			};
+			console.log(
+				'Using Wikimedia fallback for ' +
+					question.questionId +
+					' (' +
+					result.query +
+					')'
+			);
+			callback(true);
+		}
+
+		if (alreadyHave) {
+			applyResult(true);
+			return;
+		}
+		download(result.imageUrl, filename, applyResult, 'image');
+	});
+}
+
+function emitQuestionData(room, question) {
+	emitGame(room.code, 'game data', {
+		questionID: question.questionId,
+		question: question,
+	});
+}
+
 function downloadImages(room) {
 	for (var question in room.questions) {
 		var q = room.questions[question];
 		var mediaLink = String(q.mediaLink || '').trim();
 		console.log('MEDIA LINK on question loop: /' + mediaLink + '/');
 		if (!mediaLink) {
-			emitGame(room.code, 'game data', {
-				questionID: q.questionId,
-				question: q,
-			});
+			emitQuestionData(room, q);
 			continue;
 		}
 
@@ -1616,10 +1840,15 @@ function downloadImages(room) {
 		var filename = mediaFilenameFromUrl(mediaLink);
 		if (!filename || filename === 'undefined') {
 			q._mediaOriginalUrl = mediaLink;
-			emitGame(room.code, 'game data', {
-				questionID: q.questionId,
-				question: q,
-			});
+			if (mediaType === 'image') {
+				(function (_question, r) {
+					tryCommonsImageFallback(_question, function () {
+						emitQuestionData(r, _question);
+					});
+				})(q, room);
+			} else {
+				emitQuestionData(room, q);
+			}
 			continue;
 		}
 
@@ -1638,10 +1867,7 @@ function downloadImages(room) {
 		if (alreadyHave) {
 			console.log("doesn't need download: " + filePath);
 			q.mediaLink = filePath;
-			emitGame(room.code, 'game data', {
-				questionID: q.questionId,
-				question: q,
-			});
+			emitQuestionData(room, q);
 			continue;
 		}
 
@@ -1654,17 +1880,20 @@ function downloadImages(room) {
 				_filename,
 				function (ok) {
 					console.log('done download ok=' + ok);
+					_question._mediaOriginalUrl = _originalUrl;
 					if (ok) {
 						_question.mediaLink = _filePath;
+						emitQuestionData(r, _question);
 					} else {
-						/* Keep remote URL so the host can still try loading it */
 						_question.mediaLink = _originalUrl;
+						if (_mediaType === 'image') {
+							tryCommonsImageFallback(_question, function () {
+								emitQuestionData(r, _question);
+							});
+							return;
+						}
+						emitQuestionData(r, _question);
 					}
-					_question._mediaOriginalUrl = _originalUrl;
-					emitGame(r.code, 'game data', {
-						questionID: _question.questionId,
-						question: _question,
-					});
 				},
 				_mediaType
 			);
@@ -1712,7 +1941,13 @@ function sendPlayerReconnectState(socket, name, room) {
 		'final-jeopardy-question': fjq ? fjq._question : '',
 		'final-jeopardy-player-bet': fjBetRecorded,
 		'final-jeopardy-all-wagers-in': allFjWagersIn,
+		'final-jeopardy-answer-submitted':
+			!!room.finalJeopardyAnswerSubmitted[name],
 		'buzzed-in-player-name': room.buzzedInPlayerName,
+		'buzzed-in-member-name': room.buzzedInMemberName,
+		'buzzed-in-client-id': room.buzzedInClientId,
+		'member-name': socket.memberName || name,
+		mode: room.mode,
 		active: room.gameState.active === true,
 		'round-timer': room.roundTimer,
 		'answer-time': room.answerTime,
@@ -1890,6 +2125,120 @@ var VALID_EPISODE_FILTERS = {
 	teacher: true,
 	champions: true,
 };
+
+function clearOptionsVoteTimer(room) {
+	if (!room) {
+		return;
+	}
+	if (room.optionsVoteTimer) {
+		clearTimeout(room.optionsVoteTimer);
+		room.optionsVoteTimer = null;
+	}
+	if (room.optionsVoteTickTimer) {
+		clearInterval(room.optionsVoteTickTimer);
+		room.optionsVoteTickTimer = null;
+	}
+	room.optionsVoteEndsAt = 0;
+}
+
+function getOptionsVoteRemainingSeconds(room) {
+	if (!room || !room.optionsVoteEndsAt) {
+		return 0;
+	}
+	return Math.max(0, Math.ceil((room.optionsVoteEndsAt - Date.now()) / 1000));
+}
+
+function emitOptionsVoteTimer(room) {
+	if (!room) {
+		return;
+	}
+	emitPlayers(room.code, 'game options vote timer', {
+		remaining: getOptionsVoteRemainingSeconds(room),
+		total: Math.round(OPTIONS_VOTE_TIMEOUT_MS / 1000),
+	});
+}
+
+function startOptionsVoteTimer(room) {
+	if (!room || room.hostGameOptionsSelected || room.optionsVoteTimer) {
+		return;
+	}
+	room.optionsVoteEndsAt = Date.now() + OPTIONS_VOTE_TIMEOUT_MS;
+	emitOptionsVoteTimer(room);
+	room.optionsVoteTickTimer = setInterval(function () {
+		if (!room || room.hostGameOptionsSelected) {
+			clearOptionsVoteTimer(room);
+			return;
+		}
+		emitOptionsVoteTimer(room);
+	}, 1000);
+	room.optionsVoteTimer = setTimeout(function () {
+		room.optionsVoteTimer = null;
+		finalizeGameOptionsVotes(room, 'timeout');
+	}, OPTIONS_VOTE_TIMEOUT_MS);
+}
+
+function finalizeGameOptionsVotes(room, reason) {
+	if (!room || room.hostGameOptionsSelected) {
+		return;
+	}
+	clearOptionsVoteTimer(room);
+	room.answerTime =
+		tallyMajorityOrNull(room.optionVotes, 'answerTime') || '20';
+	room.decade = tallyMajorityOrNull(room.optionVotes, 'decade') || '20s';
+	room.episodeFilter =
+		tallyMajorityOrNull(room.optionVotes, 'episodeFilter') || 'any';
+	room.hostGameOptionsSelected = true;
+	var received = objectLength(room.optionVotes);
+	room.optionVotes = {};
+	var loadMsg =
+		reason === 'timeout'
+			? received
+				? 'Vote time is up. Using ' +
+				  received +
+				  ' vote' +
+				  (received === 1 ? '' : 's') +
+				  '…'
+				: 'Vote time is up. Using default settings…'
+			: 'All votes in. Searching for a playable game…';
+	emitPlayers(room.code, 'game setup loading', {
+		reason: reason || 'complete',
+		message: loadMsg,
+	});
+	emitGame(room.code, 'host game load status', {
+		phase: 'loading',
+		message: loadMsg,
+	});
+	selectGameForRoom(room, function (returnValue) {
+		if (!returnValue || returnValue.game == null) {
+			console.error('selectGameForRoom: no game row returned');
+			room.hostGameOptionsSelected = false;
+			emitPlayers(room.code, 'game setup failed', {
+				message:
+					'No full game could be loaded. Try a different decade or set episode type to Any, or add more data to clues.db.',
+			});
+			emitGame(room.code, 'host game load status', {
+				phase: 'error',
+				message:
+					'No 61-clue game found. Try other votes or expand the database.',
+			});
+			startOptionsVoteTimer(room);
+			return;
+		}
+		room.gameId = returnValue.game;
+		room.airdate = returnValue.airdate;
+		var tempDate = new Date(room.airdate);
+		room.airdate = formatPlayerOptionDate(tempDate);
+		appendPlayedGameIdToDisk(room.gameId);
+		console.log('GAME_ID: ' + room.gameId + ' AIRDATE ' + room.airdate);
+		emitGame(room.code, 'host game load status', {
+			phase: 'done',
+			message: '',
+		});
+		emitPlayers(room.code, 'answer time data', room.answerTime);
+		emitGame(room.code, 'answer time data', room.answerTime);
+		setGameDataNew(room);
+	});
+}
 
 function normalizeOptionDecade(d) {
 	var s = String(d || '').trim();
@@ -2161,6 +2510,8 @@ function buzzedInBeginCountdown(room) {
 			emitPlayers(room.code, 'update buzzer interval', {
 				buzzedInTimerCount: room.buzzedInTimerCount,
 				buzzedInPlayerName: room.buzzedInPlayerName,
+				buzzedInMemberName: room.buzzedInMemberName,
+				buzzedInClientId: room.buzzedInClientId,
 			});
 			if (room.buzzedInTimerCount === 0) {
 				stopTimer(room.buzzedInTimer);

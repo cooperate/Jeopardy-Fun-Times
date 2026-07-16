@@ -129,6 +129,8 @@ $(document).ready(function() {
 	var finalJeopardyAnswersOpened = false;
 	var FINAL_JEOPARDY_THEME_MS = 32500;
 	var answerTime = 15;
+	var gameMode = 'standard';
+	var latestHostPlayers = [];
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR = "../../game-media/images/";
 
@@ -548,6 +550,10 @@ $(document).ready(function() {
 	    questionList[data.questionID].mediaType = data.question._mediaType;
 	    questionList[data.questionID]._mediaOriginalUrl =
 	    	data.question._mediaOriginalUrl || '';
+	    questionList[data.questionID]._mediaAttribution =
+	    	data.question._mediaAttribution || null;
+	    questionList[data.questionID]._mediaFallback =
+	    	!!data.question._mediaFallback;
 	    console.log("QUESTION LIST LENGTH: " + Object.keys(questionList).length);
 	    if (Object.keys(questionList).length == 61){
 	    	startGame();
@@ -565,18 +571,16 @@ $(document).ready(function() {
 	}*/
 
 	var player_login_count = 0;
+	var lastRosterJoinCount = 0;
 
 	 socket.on('login name', function(name){
-        buildPlayerBox(name);
-
-        //play player join sound
-	    playSound(playerJoinSound);
-
-
-	    player_login_count++
-	    $("#player_name_bubble_" + player_login_count).append("<h2>" + name + "</h2>");
-	    $("#player_name_bubble_" + player_login_count).fadeIn();
-	    updateHostJoinedPlayersPanelFromLocalState();
+        /* Legacy event — roster update is the source of truth for modes. */
+        if (typeof name === 'string' && name) {
+        	buildPlayerBox(name);
+        	playSound(playerJoinSound);
+        	player_login_count++;
+        	updateHostJoinedPlayersPanelFromLocalState();
+        }
      });
 
 	 socket.on('answer time data', function(answerTimeData){
@@ -587,26 +591,41 @@ $(document).ready(function() {
 	  		.text('');
 	  });
 
-	 function buildPlayerBox(name){
+	 function buildPlayerBox(name, members){
 
 	 	var score = 0;
-	 	var content = '';
-	 	nameIds[name] = playerCount;
+	 	var id = playerCount;
+	 	nameIds[name] = id;
 	 	playerNames.push(name);
 	 	console.log(playerNames);
-	 	content ="<tr id='active_indicator_" + nameIds[name] + "' style='height:20px;font-size:35px;vertical-align:middle;'><td>&nbsp;</td></tr>\
-	 			<tr class='score'>\
-      			<td id='name_" + nameIds[name] + "'>" + score + "</td>\
-      			</tr>\
-      			<tr id='player_name_" + nameIds[name] + "' class='name'>\
-      			<td>" + name + "</td>\
-      			</tr>";
+	 	var memberLine =
+	 		gameMode === 'team' && members && members.length
+	 			? "<div class='player-podium__members'>" +
+	 			  $('<div>').text(members.join(' + ')).html() +
+	 			  '</div>'
+	 			: '';
+	 	var safeName = $('<div>').text(name).html();
+	 	var content =
+	 		"<div class='player-podium' id='player_podium_" + id + "'>" +
+	 			"<div class='player_type' id='player_typing_" + id + "' aria-hidden='true'>" +
+	 				"<h2>BUZZED IN</h2>" +
+	 				"<div class='player_type__name'></div>" +
+	 				"<div class='player_type__countdown'></div>" +
+	 				"<div class='progress'></div>" +
+	 			"</div>" +
+	 			"<table class='player-podium__table'>" +
+	 				"<tr id='active_indicator_" + id + "' class='player-podium__status'><td>&nbsp;</td></tr>" +
+	 				"<tr class='score'>" +
+	 					"<td id='name_" + id + "'>" + score + "</td>" +
+	 				"</tr>" +
+	 				"<tr id='player_name_" + id + "' class='name'>" +
+	 					"<td>" + safeName + memberLine + "</td>" +
+	 				"</tr>" +
+	 			"</table>" +
+	 		"</div>";
 
-      	if(playerCount < 5)
-      	{
-	 		$('#players_table').append(content);
-	 		playerCount++;
-	 	}
+	 	$('#players_table').append(content);
+	 	playerCount++;
 
 	 	
 	 }
@@ -696,9 +715,11 @@ $(document).ready(function() {
 		playerCount = 0;
 		nameIds = {};
 		playerNames = [];
+		latestHostPlayers = snapshot.players.slice();
+		$(document.body).toggleClass('host-many-players', snapshot.players.length > 5);
 		var pi;
 		for (pi = 0; pi < snapshot.players.length; pi++) {
-			buildPlayerBox(snapshot.players[pi].name);
+			buildPlayerBox(snapshot.players[pi].name, snapshot.players[pi].members);
 			$('#name_' + nameIds[snapshot.players[pi].name]).html(snapshot.players[pi].score);
 		}
 		player_login_count = snapshot.players.length;
@@ -716,7 +737,11 @@ $(document).ready(function() {
 		var names = [];
 		var i;
 		for (i = 0; i < players.length; i++) {
-			names.push(players[i].name);
+			if (gameMode === 'team' && players[i].members && players[i].members.length) {
+				names.push(players[i].name + ' (' + players[i].members.join(' + ') + ')');
+			} else {
+				names.push(players[i].name);
+			}
 		}
 		el.text(names.join(', '));
 	}
@@ -731,18 +756,25 @@ $(document).ready(function() {
 	}
 
 	function restoreIntroNameBubblesFromSnapshot(players) {
-		var b;
-		for (b = 1; b <= 5; b++) {
-			$('#player_name_bubble_' + b).empty().hide();
-		}
+		var $wrap = $('.player_name_bubbles');
+		$wrap.empty();
 		if (!players || !players.length) {
 			return;
 		}
 		var j;
-		for (j = 0; j < players.length && j < 5; j++) {
-			$('#player_name_bubble_' + (j + 1))
-				.append($('<h2>').text(players[j].name))
-				.fadeIn();
+		for (j = 0; j < players.length; j++) {
+			var $bubble = $('<div>', {
+				class: 'player_name_bubble',
+				id: 'player_name_bubble_' + (j + 1),
+			}).append($('<h2>').text(players[j].name));
+			if (gameMode === 'team' && players[j].members && players[j].members.length) {
+				$bubble.append(
+					$('<p>', { class: 'player_name_bubble__members' }).text(
+						players[j].members.join(' + ')
+					)
+				);
+			}
+			$wrap.append($bubble);
 		}
 	}
 
@@ -751,6 +783,25 @@ $(document).ready(function() {
 		rebuildHostPlayersTableFromSnapshot(snapshot);
 		updateHostJoinedPlayersPanel(snapshot.players || []);
 		restoreIntroNameBubblesFromSnapshot(snapshot.players || []);
+	}
+
+	function applyHostRoomConfiguration(snapshot) {
+		if (!snapshot) {
+			return;
+		}
+		gameMode = snapshot.mode || gameMode;
+		var config = snapshot.modeConfig || {};
+		$('#host_mode_badge').text(config.label || gameMode.toUpperCase() + ' JEOPARDY');
+		$(document.body)
+			.removeClass('host-mode-standard host-mode-team host-mode-open')
+			.addClass('host-mode-' + gameMode);
+		var count = snapshot.players ? snapshot.players.length : latestHostPlayers.length;
+		var canStartOpen =
+			gameMode === 'open' &&
+			!snapshot.gameActive &&
+			!snapshot.setupVotingOpen &&
+			count >= (config.minContestants || 3);
+		$('#host_start_setup_btn').prop('hidden', !canStartOpen);
 	}
 
 	function applyHostSnapshot(snapshot) {
@@ -778,6 +829,8 @@ $(document).ready(function() {
 			);
 			questionList[qid].mediaType = q._mediaType;
 			questionList[qid]._mediaOriginalUrl = q._mediaOriginalUrl || '';
+			questionList[qid]._mediaAttribution = q._mediaAttribution || null;
+			questionList[qid]._mediaFallback = !!q._mediaFallback;
 		}
 		rebuildHostPlayersTableFromSnapshot(snapshot);
 
@@ -847,6 +900,7 @@ $(document).ready(function() {
 		if (!snapshot) {
 			return;
 		}
+		applyHostRoomConfiguration(snapshot);
 		var full = applyHostSnapshot(snapshot);
 		if (full) {
 			console.log('Host UI restored from server snapshot');
@@ -856,6 +910,33 @@ $(document).ready(function() {
 		if (snapshot.players && snapshot.players.length > 0) {
 			console.log('Host player roster synced (lobby or board not in snapshot yet)');
 		}
+	});
+
+	socket.on('roster update', function (players) {
+		var list = players || [];
+		var snapshot = {
+			players: list,
+			mode: gameMode,
+			modeConfig: {
+				label: $('#host_mode_badge').text(),
+				minContestants: 3,
+			},
+			gameActive: false,
+			setupVotingOpen: false,
+		};
+		if (list.length > lastRosterJoinCount) {
+			playSound(playerJoinSound);
+		}
+		lastRosterJoinCount = list.length;
+		player_login_count = list.length;
+		rebuildHostPlayersTableFromSnapshot(snapshot);
+		updateHostJoinedPlayersPanel(snapshot.players);
+		restoreIntroNameBubblesFromSnapshot(snapshot.players);
+		applyHostRoomConfiguration(snapshot);
+	});
+
+	socket.on('setup voting started', function () {
+		$('#host_start_setup_btn').prop('hidden', true);
 	});
 
 	//populate game board
@@ -973,7 +1054,7 @@ $(document).ready(function() {
 							console.log("ACTIVE PLAYER MESSAGE FINISHED.");
 							staticMessageOff();
 							hideQuestionField();
-							playSound(chooseCategoryTheme);
+							stopSound(chooseCategoryTheme);
 							flashActiveOn(data.playerName);
 							socket.emit('open question category', data.playerName);
 						});
@@ -982,7 +1063,7 @@ $(document).ready(function() {
 								console.log("ACTIVE PLAYER MESSAGE FINISHED.");
 								staticMessageOff();
 								hideQuestionField();
-								playSound(chooseCategoryTheme);
+								stopSound(chooseCategoryTheme);
 								flashActiveOn(data.playerName);
 								socket.emit('open question category', data.playerName);
 							}
@@ -1431,6 +1512,14 @@ $(document).ready(function() {
 			winners = [playersFJ[playerNamesArray[0]]];
 		}
 
+		for (i = $('#player_container .player_display').length; i < playerNamesArray.length; i++) {
+			$('#player_container').append(
+				$('<div>', {
+					class: 'player_display',
+					id: 'player_' + i,
+				}).append($('<div>', { class: 'secure_player_container' }))
+			);
+		}
 		$('.player_display .secure_player_container').empty();
 		$('.player_display').addClass('player-reveal-hidden');
 		$('#player_container').css({ width: '100%', height: '100%' });
@@ -1793,7 +1882,7 @@ $(document).ready(function() {
 		  		}
 		  		messageSuccess = true;
 		  		socket.emit('open submit dd');
-		  		drawTypingPopup(activePlayerName);
+		  		drawTypingPopup(activePlayerName, question.memberName);
 		  	}, { interrupt: true });
 	  });
 
@@ -1805,7 +1894,7 @@ $(document).ready(function() {
 		 	console.log('buzzer pressed');
 		 	socket.emit('close buzzer');
 		 	flashBuzzer(pressed.playerName);
-		 	drawTypingPopup(pressed.playerName);
+		 	drawTypingPopup(pressed.playerName, pressed.memberName);
 		 	stopSound(questionTheme);
 		 	//play buzzer sound
 		 	playSound(buzzInSound);
@@ -2053,6 +2142,7 @@ $(document).ready(function() {
 		var mediaLink = String(q.mediaLink || '').trim();
 		var mediaType = q.mediaType || 'none';
 		var originalUrl = String(q._mediaOriginalUrl || '').trim();
+		var attribution = q._mediaFallback ? q._mediaAttribution : null;
 		console.log("MEDIA LINK: " + mediaLink + " type=" + mediaType);
 
 		if (!mediaLink || mediaLink === 'no url') {
@@ -2063,7 +2153,7 @@ $(document).ready(function() {
 			mediaType === 'image' ||
 			(mediaType === 'none' && /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(mediaLink))
 		) {
-			showQuestionImage(mediaLink, originalUrl);
+			showQuestionImage(mediaLink, originalUrl, attribution);
 			return;
 		}
 
@@ -2083,19 +2173,73 @@ $(document).ready(function() {
 		}
 	}
 
-	function showQuestionImage(primaryUrl, fallbackUrl) {
+	function safeHttpUrl(value) {
+		var url = String(value || '');
+		return /^https?:\/\//i.test(url) ? url : '';
+	}
+
+	function showImageAttribution($container, attribution) {
+		if (!attribution) {
+			return;
+		}
+		var $credit = $('<div>', { class: 'image_attribution' });
+		var sourceUrl = safeHttpUrl(attribution.sourceUrl);
+		var licenseUrl = safeHttpUrl(attribution.licenseUrl);
+		var artist = String(attribution.artist || 'Wikimedia Commons contributor');
+		var license = String(attribution.license || 'license details');
+
+		$credit.append(document.createTextNode('Image: '));
+		if (sourceUrl) {
+			$credit.append(
+				$('<a>', {
+					href: sourceUrl,
+					target: '_blank',
+					rel: 'noopener noreferrer',
+					text: artist,
+				})
+			);
+		} else {
+			$credit.append(document.createTextNode(artist));
+		}
+		$credit.append(document.createTextNode(' · '));
+		if (licenseUrl) {
+			$credit.append(
+				$('<a>', {
+					href: licenseUrl,
+					target: '_blank',
+					rel: 'noopener noreferrer',
+					text: license,
+				})
+			);
+		} else {
+			$credit.append(document.createTextNode(license));
+		}
+		$container.append($credit);
+	}
+
+	function showQuestionImage(primaryUrl, fallbackUrl, attribution) {
 		var $container = $("#question_field #image_container");
 		var $img = $('<img>', {
 			id: 'question_image',
 			alt: 'Clue media',
 		});
 		var triedFallback = false;
+		var usingPrimary = true;
+		$img.on('load', function () {
+			$container.find('.image_attribution').remove();
+			if (usingPrimary) {
+				showImageAttribution($container, attribution);
+			}
+		});
 		$img.on('error', function () {
 			if (!triedFallback && fallbackUrl && fallbackUrl !== primaryUrl) {
 				triedFallback = true;
+				usingPrimary = false;
+				$container.find('.image_attribution').remove();
 				$img.attr('src', fallbackUrl);
 				return;
 			}
+			$container.find('.image_attribution').remove();
 			$img.remove();
 		});
 		$img.attr('src', primaryUrl);
@@ -2157,8 +2301,9 @@ $(document).ready(function() {
 		$('#question_field').css("width", "0px");
 		$('#question_field').css("font-size", "0px");
 		$('#question_field').css("display", "flex");
+		var questionWidth = $(document.body).hasClass('host-many-players') ? '75%' : '85%';
 		$('#question_field').animate({
-			width: "85%",
+			width: questionWidth,
 			height: "100%",
 			fontSize: "65px"
 		}, 1500, function(){
@@ -2264,7 +2409,7 @@ $(document).ready(function() {
     					message = playerName + ', you have the board.';
     					postScreenMessage(message, true, 2000);
     					messageToVoice(message, true, function () {
-    						playSound(chooseCategoryTheme);
+    						stopSound(chooseCategoryTheme);
     						flashActiveOn(activePlayerName);
     					});
     					socket.emit('begin round timer');
@@ -2472,6 +2617,11 @@ $(document).ready(function() {
 		socket.emit('host request new game');
 	});
 
+	$('#host_start_setup_btn').on('click', function () {
+		$(this).prop('disabled', true).text('Starting…');
+		socket.emit('host start setup');
+	});
+
     //loop the theme if it ends
     jeopardyIntroMusic.addEventListener('ended', function() {
     	if (hostSoundMuted || !hostPageAudioPrimed) {
@@ -2636,53 +2786,62 @@ $(document).ready(function() {
 	    ctx.restore();
 	}
 
-	var numberPercent = new Array();
-	numberPercent[0]=0;
-	numberPercent[1]=0;
-	numberPercent[2]=0;
-	numberPercent[3]=0;
-	numberPercent[4]=0;
 	var timePercent = new Array();
 	
 	//question timer for popups
-	function drawTypingPopup(pressedPlayerName)
+	function drawTypingPopup(pressedPlayerName, respondingMemberName)
 	{
 		console.log("drawing for " + pressedPlayerName);
 
 		var idForPlayer = nameIds[pressedPlayerName];
+		if (idForPlayer === undefined || idForPlayer === null) {
+			console.warn('No podium found for buzzed player:', pressedPlayerName);
+			return;
+		}
+		var $tab = $("#player_typing_" + idForPlayer);
+		var responderLabel =
+			gameMode === 'team' && respondingMemberName
+				? respondingMemberName + ' for ' + pressedPlayerName
+				: pressedPlayerName;
+		$tab.find('.player_type__name').text(responderLabel);
+		$tab.find('.player_type__countdown').text(answerTime + 's');
+		$tab
+			.stop(true, true)
+			.css({ display: 'flex', opacity: 1 })
+			.attr('aria-hidden', 'false')
+			.addClass('player_type--visible');
+		$tab.find('.progress').css('width', '100%');
 
-		console.log(idForPlayer);
-		$("#player_typing_" + idForPlayer).animate({
-			right: "+=50"
-		}, 1500, function(){
-
-		});
-
-
-		//draw animation on popup
+		clearInterval(timePercent["timer_" + idForPlayer]);
+		var startedAt = Date.now();
+		var durationMs = Math.max(1, Number(answerTime) || 15) * 1000;
 		timePercent["timer_" + idForPlayer] = setInterval(function(){
-			if (numberPercent[idForPlayer] > answerTime * 100)
-			{
-				clearInterval(timePercent["timer_"+idForPlayer]);
-				numberPercent[idForPlayer] = 0;
+			var elapsed = Date.now() - startedAt;
+			var remainingMs = Math.max(0, durationMs - elapsed);
+			var remainingSeconds = Math.ceil(remainingMs / 1000);
+			var remainingPercent = (remainingMs / durationMs) * 100;
+			$tab.find('.player_type__countdown').text(remainingSeconds + 's');
+			$tab.find('.progress').css('width', remainingPercent + '%');
+			if (remainingMs <= 0) {
+				clearInterval(timePercent["timer_" + idForPlayer]);
 			}
-			else{
-				$("#player_typing_" + idForPlayer + " .progress").css("height", numberPercent[idForPlayer]/answerTime + '%');
-			}
-			numberPercent[idForPlayer]++;
-		}, 10);
+		}, 100);
 	}	
 
 	function hidePopup(pressedPlayerName)
 	{
 		var idForPlayer = nameIds[pressedPlayerName];
+		if (idForPlayer === undefined || idForPlayer === null) {
+			return;
+		}
 		clearInterval(timePercent["timer_"+idForPlayer]);
-		numberPercent[idForPlayer] = 0;
-		$("#player_typing_" + idForPlayer).animate({
-					right: "-=50"
-				}, 1500, function(){
-					
-				});
+		var $tab = $("#player_typing_" + idForPlayer);
+		$tab
+			.stop(true, true)
+			.removeClass('player_type--visible')
+			.attr('aria-hidden', 'true')
+			.fadeOut(180);
+		$tab.find('.progress').css('width', '0%');
 	}
 
 	function animateBoard(jeopardy){

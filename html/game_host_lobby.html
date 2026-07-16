@@ -9,14 +9,33 @@
   <link rel="stylesheet" href="/css/simple_modal.css">
 </head>
 <body>
-  <div id="game_select_button_container">
-    <div class="game_select_button">
-      <button type="button" id="host_new_room_btn" class="player_join_button fancy_button bg-gradient1">New game</button>
+  <main class="host-mode-select">
+    <header class="host-mode-select__header">
+      <p class="host-mode-select__eyebrow">Create a game</p>
+      <h1>Choose your Jeopardy mode</h1>
+      <p>Players join from their own devices after the room is created.</p>
+    </header>
+    <div class="host-mode-grid" role="list">
+      <button type="button" class="host-mode-card" data-mode="standard" role="listitem">
+        <span class="host-mode-card__title">STANDARD JEOPARDY</span>
+        <span class="host-mode-card__count">3 players only</span>
+        <span class="host-mode-card__description">The classic game. Every player has their own buzzer and score.</span>
+      </button>
+      <button type="button" class="host-mode-card" data-mode="team" role="listitem">
+        <span class="host-mode-card__title">TEAM JEOPARDY</span>
+        <span class="host-mode-card__count">3 teams · up to 2 people per team</span>
+        <span class="host-mode-card__description">Teammates share a score and board control. The first teammate to buzz answers for the team.</span>
+      </button>
+      <button type="button" class="host-mode-card" data-mode="open" role="listitem">
+        <span class="host-mode-card__title">OPEN JEOPARDY</span>
+        <span class="host-mode-card__count">3–12 players</span>
+        <span class="host-mode-card__description">Built for a crowd, with a compact host scoreboard that stays legible.</span>
+      </button>
     </div>
-    <div class="game_select_button" style="margin-top: 1rem;">
+    <div class="host-mode-select__existing">
       <button type="button" id="host_join_room_btn" class="player_join_button fancy_button bg-gradient1">Join with room code</button>
     </div>
-  </div>
+  </main>
   <script src="/javascript/libraries/jquery-3.7.1.min.js"></script>
   <script src="/javascript/libraries/simple_modal.js"></script>
   <script src="/javascript/libraries/gradients.js"></script>

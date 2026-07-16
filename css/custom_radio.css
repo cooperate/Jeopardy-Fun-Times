@@ -1,15 +1,25 @@
 .game_options{
-    position:absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 99;
-    text-shadow: none;
-    width: min(22rem, calc(100vw - 2rem));
-    max-height: calc(100vh - 2rem);
-    overflow-y: auto;
+    position: fixed;
+    inset: 0;
+    z-index: 120;
+    display: none;
     box-sizing: border-box;
-    padding: 0.5rem 0 0;
+    padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    background: #0a2f6b url(../game-media/images/static_bg.png) repeat 0 0;
+    text-shadow: none;
+}
+
+.game_options__panel {
+    width: min(22rem, 100%);
+    margin: min(8vh, 3rem) auto 0;
+    padding: 1.1rem 1rem 1.25rem;
+    box-sizing: border-box;
+    border-radius: 16px;
+    background: rgba(8, 28, 72, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
 }
 
 .game_options h2,
@@ -27,8 +37,23 @@
     margin: 0.85rem 0 0.35rem;
 }
 
-.game_options h2:first-child {
-    margin-top: 0;
+.game_options h2:first-of-type {
+    margin-top: 0.35rem;
+}
+
+.game_options__countdown {
+    margin: 0 0 0.35rem;
+    color: #ffea00;
+    font-family: 'Korinna', sans-serif;
+    font-size: clamp(1.35rem, 5vw, 1.8rem);
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-align: center;
+    text-shadow: none;
+}
+
+.game_options__countdown--urgent {
+    color: #ff8a65;
 }
 
 .game_options__field {
@@ -65,12 +90,33 @@
 }
 
 .game_options__select:disabled {
-    opacity: 0.65;
+    opacity: 0.55;
+    cursor: not-allowed;
+    background: rgba(220, 220, 220, 0.9);
+    color: #555;
 }
 
 .game_options button{
     width: 100%;
     margin-top: 0.5rem;
+}
+
+.game_options--locked {
+    pointer-events: none;
+}
+
+.game_options--locked .game_options__select {
+    opacity: 0.55;
+    cursor: not-allowed;
+    background: rgba(220, 220, 220, 0.9);
+    color: #555;
+}
+
+.game_options button:disabled,
+.game_options--locked button {
+    opacity: 0.55;
+    cursor: not-allowed;
+    letter-spacing: 1px;
 }
 
 .game_options__feedback {
@@ -85,4 +131,8 @@
 
 .game_options__feedback[hidden] {
     display: none !important;
+}
+
+.game_options .fancy_button {
+    background-color: #233142;
 }

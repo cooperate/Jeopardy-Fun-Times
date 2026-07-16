@@ -25,6 +25,58 @@ HTML, BODY {
   height: 100%;
 }
 
+#game_intro .player_name_bubbles {
+  position: absolute;
+  left: 3vw;
+  right: 3vw;
+  bottom: 4vh;
+  top: auto;
+  width: auto;
+  height: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: stretch;
+  gap: 12px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+#game_intro .player_name_bubbles .player_name_bubble {
+  display: flex !important;
+  flex: 0 1 180px;
+  width: auto;
+  max-width: 220px;
+  min-width: 120px;
+  height: auto;
+  min-height: 78px;
+  margin: 0;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-radius: 14px;
+  background: rgba(31, 73, 171, 0.92);
+  bottom: auto;
+}
+#game_intro .player_name_bubbles h2 {
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  transform: none !important;
+  margin: 0;
+  font-size: clamp(18px, 2.2vw, 34px) !important;
+  line-height: 1.05;
+  color: #fff;
+}
+.player_name_bubble__members {
+  margin: 7px 0 0;
+  color: #dce8ff;
+  font-size: clamp(11px, 1vw, 15px);
+  line-height: 1.1;
+}
+
 /* Host: fixed sound toggle (autoplay unlock + mute) */
 .host-sound-toggle {
   position: fixed;
@@ -151,6 +203,47 @@ body.host-board-active .host-round-timer__label {
 .host-new-game-btn:focus {
   outline: 2px solid #fff;
   outline-offset: 2px;
+}
+
+.host-mode-badge {
+  position: fixed;
+  top: 132px;
+  left: 132px;
+  z-index: 99996;
+  max-width: 220px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #ffea00;
+  font-family: 'Korinna', sans-serif;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-shadow: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.host-start-setup-btn {
+  position: fixed;
+  top: 286px;
+  left: 14px;
+  z-index: 99997;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #ffea00;
+  color: #111;
+  font-family: 'Korinna', sans-serif;
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.35);
+}
+.host-start-setup-btn[hidden] {
+  display: none;
+}
+body.host-board-active .host-mode-badge,
+body.host-board-active .host-start-setup-btn {
+  display: none !important;
 }
 
 /* Host: who has connected (visible on intro before the board loads; updates after refresh) */
