@@ -5,7 +5,7 @@
 		Player Field
 	</title>
 	<meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, shrink-to-fit=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
     <meta name="theme-color" content="#000000">
 	<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 	<link rel="stylesheet" type="text/css" href="/css/style.css" >
@@ -13,7 +13,11 @@
 	<link rel="stylesheet" href="/css/simple_modal.css">
 	<link rel="stylesheet" href="/css/custom_radio.css">
 </head>
-<body>
+<body class="player-page">
+	<div id="player_connection_status" class="player-connection-status player-connection-status--connecting" role="status" aria-live="polite">
+		<span class="player-connection-status__dot" aria-hidden="true"></span>
+		<span id="player_connection_status_text">Connecting…</span>
+	</div>
 	<div class="game_options">
 	  <div class="game_options__panel">
 	    <p id="vote_countdown" class="game_options__countdown" role="timer" aria-live="polite">30s left</p>
@@ -65,11 +69,19 @@
 		  </div>
 			<form id="player_login" action="">
 				<input id="login_name" autocomplete="name" maxlength="24" />
-				<div id="team_name_field" class="team-name-field" hidden>
-					<label for="login_team_name">Team Name</label>
-					<input id="login_team_name" autocomplete="off" maxlength="24" placeholder="Create or join a team" />
-					<p>Use the same team name on both teammates' devices.</p>
-				</div>
+				<fieldset id="team_name_field" class="team-name-field" hidden>
+					<legend>Choose Your Team</legend>
+					<p id="team_name_hint">Join an open team or create a new Namor-generated team.</p>
+					<div id="team_selection_options" class="team-selection-options" role="group" aria-label="Existing teams" aria-describedby="team_name_hint"></div>
+					<button type="button" id="create_team_option" class="team-selection-card team-selection-card--create" aria-pressed="false">
+						<span class="team-selection-card__eyebrow">CREATE NEW TEAM</span>
+						<strong id="suggested_team_name">Generating…</strong>
+						<span>Start a team for a second player to join</span>
+					</button>
+					<input id="login_team_name" type="hidden" />
+					<input id="login_team_create" type="hidden" value="false" />
+					<p id="team_selection_status" class="team-selection-status" role="status" aria-live="polite">Select a team to continue.</p>
+				</fieldset>
 				<button class="fancy_button bg-gradient1" id="join_btn">Join Game!</button>
 			</form>
 			<p id="jeopardy_saved_name_hint" class="login-saved-hint" hidden>
@@ -77,24 +89,27 @@
 			</p>
 		</div>
 	</div>
-	<div id="message_overlay">
+	<div id="message_overlay" role="status" aria-live="polite" aria-atomic="true">
 		<img src="/game-media/images/jeopardy-logo.png" id="message_overlay_logo">
 	</div>
 	<div class = "player_field">
 		<div class = "player_field_container">
 			<div class = "player_question">
 				<div class="player_question_revealed_bounds">
-					<h2 id="question_revealed"> Your Question Will Appear Here </h2>
+					<h2 id="question_revealed" aria-live="polite"> Your Question Will Appear Here </h2>
 				</div>
 			</div>
 			<div class= "player_buzzer">	
-				<button class="buzzer"> BUZZ IN </button>
+				<p id="player_buzzer_status" class="player-buzzer-status" aria-live="polite">WAITING FOR CLUE</p>
+				<button class="buzzer" type="button" aria-describedby="player_buzzer_status">WAIT</button>
 			</div>
 			<div class = "player_answer_field">
 				<div class="player_answer_row">
+					<div id="player_answer_countdown" class="player-answer-countdown" role="timer" aria-live="polite"></div>
 					<form id="answer_submit" class="player_answer_form" action="">
 						<div class="player_answer_input_row">
-							<input id="answer_field" autocomplete="off" placeholder="What is..."/>
+							<label for="answer_field" class="visually-hidden">Your answer</label>
+							<input id="answer_field" autocomplete="off" placeholder="What is..." aria-label="Your answer"/>
 						</div>
 						<div class="player_answer_actions">
 							<button type="submit" id="answer_btn">Submit</button>
@@ -108,7 +123,8 @@
 			</div>
 			<div class = "player_bet_field">
 				<form id="bet_submit" action="">
-		      		<input id="bet_field" autocomplete="off" placeholder="Enter your wager."/><button id="bet_btn">Make Wager</button>
+		      		<label for="bet_field" class="visually-hidden">Your wager</label>
+		      		<input id="bet_field" autocomplete="off" placeholder="Enter your wager." aria-label="Your wager"/><button id="bet_btn">Make Wager</button>
 		    	</form>
 			</div>
 			<div class = "player_timer">

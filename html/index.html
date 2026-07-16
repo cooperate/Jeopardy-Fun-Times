@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, shrink-to-fit=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
     <meta name="theme-color" content="#000000">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <title>Jeopardy!</title>
@@ -12,9 +12,13 @@
   <body>
    <button type="button" id="host_sound_toggle" class="host-sound-toggle" aria-live="polite" title="Sound: click to enable (browsers block audio until you interact)">🔇</button>
    <div id="host_room_code_panel" class="host-room-code-panel" aria-live="polite">
-     <span class="host-room-code-panel__label">Room code</span>
-     <span id="host_room_code_value" class="host-room-code-panel__code" title="Players enter this on /home">----</span>
-     <span class="host-room-code-panel__hint">Players: <code>/home</code> or <code>/player?room=</code> + this code</span>
+     <div class="host-room-code-panel__details">
+       <span class="host-room-code-panel__label">Join the game</span>
+       <span id="host_room_code_value" class="host-room-code-panel__code" title="Players enter this on /home">----</span>
+       <span class="host-room-code-panel__hint">Scan or visit <strong id="host_join_url_text">/home</strong></span>
+       <span id="host_join_count" class="host-room-code-panel__count">0 joined</span>
+     </div>
+     <img id="host_join_qr" class="host-room-code-panel__qr" alt="QR code to join this room" hidden>
    </div>
    <button type="button" id="host_new_game_btn" class="host-new-game-btn" title="Reset scores and start a fresh game for everyone">New game</button>
    <div id="host_mode_badge" class="host-mode-badge">STANDARD JEOPARDY</div>
@@ -37,6 +41,7 @@
         <div id="player_board">
           <div id="host_round_timer" class="host-round-timer" aria-live="polite">
             <div id="host_round_timer_label" class="host-round-timer__label">JEOPARDY</div>
+            <div id="host_game_state" class="host-game-state" data-state="lobby">LOBBY</div>
             <div id="host_round_timer_value" class="host-round-timer__value">10:00</div>
           </div>
           <div id="players_table">

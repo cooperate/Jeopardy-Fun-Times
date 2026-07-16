@@ -133,6 +133,43 @@
 		fitElementInContainer(inner, container, MIN_PX, maxPx);
 	}
 
+	function fitTwoLineText(inner, container, options) {
+		options = options || {};
+		if (!inner || !container || container.clientWidth < 8 || container.clientHeight < 8) {
+			return false;
+		}
+		var plain = String(options.text || readCategoryPlainText(inner)).trim();
+		var candidates = categoryTitleHtmlCandidates(plain);
+		var minPx = options.minPx || MIN_PX;
+		var maxPx = options.maxPx || categoryTitleFontUpperBound(container);
+		var previousOverflowWrap = inner.style.overflowWrap;
+		var previousWordBreak = inner.style.wordBreak;
+		var previousHyphens = inner.style.hyphens;
+		if (options.noWordBreak) {
+			inner.style.overflowWrap = 'normal';
+			inner.style.wordBreak = 'normal';
+			inner.style.hyphens = 'none';
+		}
+		var bestSize = -1;
+		var bestHtml = candidates[0];
+		for (var i = 0; i < candidates.length; i++) {
+			inner.innerHTML = candidates[i];
+			var size = fitElementInContainer(inner, container, minPx, maxPx);
+			if (size > bestSize) {
+				bestSize = size;
+				bestHtml = candidates[i];
+			}
+		}
+		inner.innerHTML = bestHtml;
+		fitElementInContainer(inner, container, minPx, maxPx);
+		if (options.noWordBreak) {
+			inner.style.overflowWrap = previousOverflowWrap;
+			inner.style.wordBreak = previousWordBreak;
+			inner.style.hyphens = previousHyphens;
+		}
+		return true;
+	}
+
 	function fitJeopardyCategoryHeaders(root) {
 		var base = root;
 		if (!base || !base.querySelector) {
@@ -240,6 +277,7 @@
 	}
 
 	global.fitJeopardyCategoryHeaders = fitJeopardyCategoryHeaders;
+	global.fitJeopardyTextInContainer = fitTwoLineText;
 	global.scheduleJeopardyCategoryHeaderFit = function (root) {
 		scheduleJeopardyCategoryHeaderFit(root);
 		ensureBoardResizeObserver(root);

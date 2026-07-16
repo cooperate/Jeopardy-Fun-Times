@@ -5,6 +5,7 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const namor = require('namor');
 const config = require('./lib/config');
 const { ensureGameHighScoreFile } = require('./lib/ensureDataFiles');
 const { Player, Question } = require('./lib/models');
@@ -225,6 +226,66 @@ function emitGame(code, event, data) {
 function emitPlayers(code, event, data) {
 	playerSpc.to(ioRoomName(code)).emit(event, data);
 }
+function buildTeamSelectionState(room) {
+	if (!room || room.mode !== 'team') {
+		return { teams: [], registrationClosed: true };
+	}
+	return {
+		teams: room.playerJoinOrder
+			.filter(function (name) {
+				return !!room.players[name];
+			})
+			.map(function (name) {
+				var memberCount = Object.keys(room.contestantMembers[name] || {}).length;
+				return {
+					name: name,
+					memberCount: memberCount,
+					maxMembers: room.modeConfig.maxMembersPerContestant,
+					available: memberCount < room.modeConfig.maxMembersPerContestant,
+				};
+			}),
+		registrationClosed: room.registrationClosed || room.gameState.active === true,
+		canCreate:
+			!room.registrationClosed &&
+			room.gameState.active !== true &&
+			objectLength(room.players) < room.modeConfig.maxContestants,
+	};
+}
+function generateUniqueTeamName(room) {
+	for (var attempt = 0; attempt < 100; attempt++) {
+		var generated = String(namor.generate({ words: 2, separator: '-' }) || '')
+			.replace(/-/g, ' ')
+			.trim()
+			.toUpperCase();
+		if (generated && generated.length <= 24 && !room.players[generated]) {
+			return generated;
+		}
+	}
+	return 'TEAM ' + (objectLength(room.players) + 1);
+}
+function emitTeamSelectionUpdate(room) {
+	if (room && room.mode === 'team') {
+		emitPlayers(room.code, 'team selection update', buildTeamSelectionState(room));
+	}
+}
+function isRoomReadyForSetup(room) {
+	if (!room || objectLength(room.players) < room.modeConfig.minContestants) {
+		return false;
+	}
+	if (room.mode !== 'team') {
+		return true;
+	}
+	return room.playerJoinOrder
+		.filter(function (name) {
+			return !!room.players[name];
+		})
+		.every(function (name) {
+			return (
+				Object.keys(room.contestantMembers[name] || {}).length >=
+				room.modeConfig.maxMembersPerContestant
+			);
+		});
+}
 function getRoomFromSocket(socket) {
 	if (!socket || !socket.roomCode) {
 		return null;
@@ -404,14 +465,29 @@ function buildHostSnapshot(room) {
 		if (!room.players[pname]) {
 			continue;
 		}
+		var memberIds = Object.keys(room.contestantMembers[pname] || {});
+		var memberDetails = memberIds.map(function (clientId) {
+			return {
+				name: room.contestantMembers[pname][clientId],
+				online: room.onlineClientIds[clientId] === pname,
+			};
+		});
 		playersList.push({
 			name: pname,
 			score: room.players[pname].score,
 			isActive: room.players[pname].active,
 			givenAnswer: room.players[pname].givenAnswer,
-			members: Object.keys(room.contestantMembers[pname] || {}).map(function (clientId) {
+			members: memberIds.map(function (clientId) {
 				return room.contestantMembers[pname][clientId];
 			}),
+			memberDetails: memberDetails,
+			online: memberDetails.some(function (member) {
+				return member.online;
+			}),
+			onlineCount: memberDetails.filter(function (member) {
+				return member.online;
+			}).length,
+			hasVoted: !!room.optionVotes[pname],
 		});
 	}
 	var ap = getPlayerActive(room);
@@ -428,6 +504,8 @@ function buildHostSnapshot(room) {
 		finalJeopardyWageringPhase: room.finalJeopardyWageringPhase,
 		finalJeopardyAnswerPhase: room.finalJeopardyAnswerPhase,
 		activePlayerName: ap == null ? '' : ap,
+		clueInProgress: !!room.clueInProgress,
+		buzzedInPlayerName: room.buzzedInPlayerName || '',
 		curQuestionId: room.curQuestionId == null ? '' : room.curQuestionId,
 		playedQuestionIds: Array.from(room.playedClueIds),
 		questions: questionsPlain,
@@ -560,7 +638,7 @@ gameSpc.on('connection', function (socket) {
 			!r ||
 			r.gameState.active ||
 			r.hostGameOptionsSelected ||
-			objectLength(r.players) < r.modeConfig.minContestants
+			!isRoomReadyForSetup(r)
 		) {
 			return;
 		}
@@ -573,7 +651,34 @@ gameSpc.on('connection', function (socket) {
 			needed: objectLength(r.players),
 		});
 		emitOptionsVoteTimer(r);
-		emitGame(r.code, 'setup voting started');
+	});
+
+	socket.on('host remove contestant', function (contestantName) {
+		var r = getRoomFromSocket(socket);
+		contestantName = String(contestantName || '').trim().toUpperCase();
+		if (
+			!r ||
+			!contestantName ||
+			r.gameState.active ||
+			r.hostGameOptionsSelected ||
+			r.optionsVoteEndsAt ||
+			!r.players[contestantName]
+		) {
+			return;
+		}
+		var memberIds = Object.keys(r.contestantMembers[contestantName] || {});
+		for (var mi = 0; mi < memberIds.length; mi++) {
+			delete r.onlineClientIds[memberIds[mi]];
+		}
+		delete r.players[contestantName];
+		delete r.contestantMembers[contestantName];
+		delete r.optionVotes[contestantName];
+		r.playerJoinOrder = r.playerJoinOrder.filter(function (name) {
+			return name !== contestantName;
+		});
+		emitPlayers(r.code, 'contestant removed', contestantName);
+		emitTeamSelectionUpdate(r);
+		emitGame(r.code, 'roster update', buildHostSnapshot(r).players);
 	});
 
 	socket.on('host request new game', function () {
@@ -1013,6 +1118,7 @@ playerSpc.on('connection', function (socket) {
 	var room = gameRooms.get(code);
 
 	console.log('player connected.');
+	socket.suggestedTeamName = room.mode === 'team' ? generateUniqueTeamName(room) : '';
 	socket.emit('room configuration', {
 		code: room.code,
 		mode: room.mode,
@@ -1020,15 +1126,20 @@ playerSpc.on('connection', function (socket) {
 		minContestants: room.modeConfig.minContestants,
 		maxContestants: room.modeConfig.maxContestants,
 		maxMembersPerContestant: room.modeConfig.maxMembersPerContestant,
+		teamSelection: buildTeamSelectionState(room),
+		suggestedTeamName: socket.suggestedTeamName,
 	});
 
 	socket.on('login name', function (login) {
 		var legacyName = typeof login === 'string' ? login : '';
 		login = login && typeof login === 'object' ? login : {};
 		var memberName = String(login.memberName || legacyName || '').trim().toUpperCase().slice(0, 24);
+		var createTeam = room.mode === 'team' && login.createTeam === true;
 		var contestantName =
 			room.mode === 'team'
-				? String(login.teamName || '').trim().toUpperCase().slice(0, 24)
+				? createTeam
+					? socket.suggestedTeamName
+					: String(login.teamName || '').trim().toUpperCase().slice(0, 24)
 				: memberName;
 		var clientId = String(login.clientId || socket.id).trim().slice(0, 80);
 		if (!memberName || !contestantName || !clientId) {
@@ -1043,8 +1154,19 @@ playerSpc.on('connection', function (socket) {
 		socket.memberName = memberName;
 		socket.clientId = clientId;
 
+		if (createTeam && (!contestantName || room.players[contestantName])) {
+			contestantName = generateUniqueTeamName(room);
+			socket.suggestedTeamName = contestantName;
+		}
 		var existing = room.players[contestantName];
 		var members = room.contestantMembers[contestantName] || {};
+		if (room.mode === 'team' && !createTeam && !existing) {
+			socket.emit('player login rejected', {
+				message: 'That team is no longer available. Choose an existing team or create a new one.',
+			});
+			emitTeamSelectionUpdate(room);
+			return;
+		}
 		if (existing) {
 			var isKnownDevice = Object.prototype.hasOwnProperty.call(members, clientId);
 			if (
@@ -1065,12 +1187,18 @@ playerSpc.on('connection', function (socket) {
 			}
 			members[clientId] = memberName;
 			room.contestantMembers[contestantName] = members;
+			room.onlineClientIds[clientId] = contestantName;
 			playerConnectionBySocketId[socket.id] = {
 				username: contestantName,
 				memberName: memberName,
 				clientId: clientId,
 				roomCode: code,
 			};
+			socket.emit('player login accepted', {
+				contestantName: contestantName,
+				memberName: memberName,
+			});
+			emitTeamSelectionUpdate(room);
 			emitGame(room.code, 'roster update', buildHostSnapshot(room).players);
 			console.log('PLAYER RECONNECT/JOIN TEAM: ' + contestantName);
 			if (room.gameState.active === true) {
@@ -1082,14 +1210,21 @@ playerSpc.on('connection', function (socket) {
 			}
 			if (
 				room.setupVotingOpen &&
-				objectLength(room.players) >= room.modeConfig.minContestants &&
+				isRoomReadyForSetup(room) &&
 				!room.hostGameOptionsSelected
 			) {
-				socket.emit('option select new');
-				socket.emit('game options vote progress', {
+				var teamVoteProgressPayload = {
 					received: objectLength(room.optionVotes),
 					needed: objectLength(room.players),
-				});
+				};
+				if (!room.optionsVoteTimer && !room.optionsVoteEndsAt) {
+					startOptionsVoteTimer(room);
+					emitPlayers(room.code, 'option select new');
+					emitPlayers(room.code, 'game options vote progress', teamVoteProgressPayload);
+				} else {
+					socket.emit('option select new');
+					socket.emit('game options vote progress', teamVoteProgressPayload);
+				}
 				emitOptionsVoteTimer(room);
 			} else {
 				socket.emit('wait for start game', contestantName);
@@ -1126,12 +1261,18 @@ playerSpc.on('connection', function (socket) {
 		room.players[contestantName] = new Player(contestantName);
 		room.contestantMembers[contestantName] = {};
 		room.contestantMembers[contestantName][clientId] = memberName;
+		room.onlineClientIds[clientId] = contestantName;
 		playerConnectionBySocketId[socket.id] = {
 			username: contestantName,
 			memberName: memberName,
 			clientId: clientId,
 			roomCode: code,
 		};
+		socket.emit('player login accepted', {
+			contestantName: contestantName,
+			memberName: memberName,
+		});
+		emitTeamSelectionUpdate(room);
 		emitGame(room.code, 'roster update', buildHostSnapshot(room).players);
 		console.log(room.players);
 		var playerTotal = objectLength(room.players);
@@ -1141,19 +1282,11 @@ playerSpc.on('connection', function (socket) {
 		};
 		if (
 			room.setupVotingOpen &&
-			playerTotal === room.modeConfig.minContestants
-		) {
-			startOptionsVoteTimer(room);
-			emitPlayers(room.code, 'option select new');
-			emitOptionsVoteTimer(room);
-		} else if (
-			room.setupVotingOpen &&
-			playerTotal > room.modeConfig.minContestants &&
+			isRoomReadyForSetup(room) &&
 			!room.hostGameOptionsSelected
 		) {
 			startOptionsVoteTimer(room);
-			socket.emit('option select new');
-			socket.emit('game options vote progress', voteProgressPayload);
+			emitPlayers(room.code, 'option select new');
 			emitPlayers(room.code, 'game options vote progress', voteProgressPayload);
 			emitOptionsVoteTimer(room);
 		} else {
@@ -1189,6 +1322,7 @@ playerSpc.on('connection', function (socket) {
 			episodeFilter: normalizeEpisodeFilterOption(optionArray[2]),
 		};
 		emitPlayers(r.code, 'contestant option vote recorded', socket.username);
+		emitGame(r.code, 'roster update', buildHostSnapshot(r).players);
 		var needed = objectLength(r.players);
 		var received = objectLength(r.optionVotes);
 		emitPlayers(r.code, 'game options vote progress', {
@@ -1432,6 +1566,18 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('disconnect', function () {
 		console.log('A user disconnected');
+		var connection = playerConnectionBySocketId[socket.id];
+		if (connection) {
+			var disconnectRoom = gameRooms.get(connection.roomCode);
+			if (disconnectRoom) {
+				delete disconnectRoom.onlineClientIds[connection.clientId];
+				emitGame(
+					disconnectRoom.code,
+					'roster update',
+					buildHostSnapshot(disconnectRoom).players
+				);
+			}
+		}
 		delete playerConnectionBySocketId[socket.id];
 	});
 });
@@ -2163,6 +2309,7 @@ function startOptionsVoteTimer(room) {
 		return;
 	}
 	room.optionsVoteEndsAt = Date.now() + OPTIONS_VOTE_TIMEOUT_MS;
+	emitGame(room.code, 'setup voting started');
 	emitOptionsVoteTimer(room);
 	room.optionsVoteTickTimer = setInterval(function () {
 		if (!room || room.hostGameOptionsSelected) {

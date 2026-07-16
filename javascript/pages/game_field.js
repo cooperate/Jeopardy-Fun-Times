@@ -1,4 +1,10 @@
 $(document).ready(function() {
+	if (
+		window.matchMedia &&
+		window.matchMedia('(prefers-reduced-motion: reduce)').matches
+	) {
+		$.fx.off = true;
+	}
 
 	class Question
 	{
@@ -130,7 +136,9 @@ $(document).ready(function() {
 	var FINAL_JEOPARDY_THEME_MS = 32500;
 	var answerTime = 15;
 	var gameMode = 'standard';
+	var hostModeConfig = {};
 	var latestHostPlayers = [];
+	var hostRosterLocked = false;
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR = "../../game-media/images/";
 
@@ -481,11 +489,35 @@ $(document).ready(function() {
 		var code = typeof payload === 'string' ? payload : payload && payload.code;
 		if (code) {
 			$('#host_room_code_value').text(code);
+			var joinUrl =
+				window.location.origin +
+				'/player?room=' +
+				encodeURIComponent(String(code));
+			$('#host_join_url_text').text(
+				window.location.host + '/player?room=' + String(code)
+			);
+			$('#host_join_qr')
+				.attr(
+					'src',
+					'https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=' +
+						encodeURIComponent(joinUrl)
+				)
+				.prop('hidden', false);
 			if ($(document.body).hasClass('host-board-active')) {
 				updateHostRoundTimerDisplay();
 			}
 		}
 	});
+
+	function setHostGameState(state, label, detail) {
+		var el = $('#host_game_state');
+		if (!el.length) {
+			return;
+		}
+		el.attr('data-state', state || 'waiting');
+		el.text(label || 'WAITING');
+		el.attr('title', detail || label || 'Waiting');
+	}
 
 	socket.on('host game load status', function (data) {
 		var el = $('#host_game_load_status');
@@ -494,6 +526,11 @@ $(document).ready(function() {
 		}
 		var phase = data && data.phase;
 		var msg = data && data.message ? String(data.message) : '';
+		if (phase === 'loading') {
+			setHostGameState('loading', 'LOADING GAME', msg);
+		} else if (phase === 'error') {
+			setHostGameState('error', 'SETUP ERROR', msg);
+		}
 		el.removeClass('host-game-load-status--error');
 		if (phase === 'done' || (!msg && phase !== 'error')) {
 			el.addClass('host-game-load-status--hidden').text('');
@@ -536,6 +573,11 @@ $(document).ready(function() {
 
 	socket.on('answer ai judging', function (data) {
 		showHostAiJudging(data && data.playerName);
+		setHostGameState(
+			'judging',
+			'JUDGING ANSWER',
+			(data && data.playerName ? data.playerName + ' · ' : '') + 'Checking response'
+		);
 	});
 
 	socket.on('answer ai judging end', function () {
@@ -605,6 +647,7 @@ $(document).ready(function() {
 	 			  '</div>'
 	 			: '';
 	 	var safeName = $('<div>').text(name).html();
+	 	var encodedName = encodeURIComponent(name).replace(/'/g, '%27');
 	 	var content =
 	 		"<div class='player-podium' id='player_podium_" + id + "'>" +
 	 			"<div class='player_type' id='player_typing_" + id + "' aria-hidden='true'>" +
@@ -619,7 +662,10 @@ $(document).ready(function() {
 	 					"<td id='name_" + id + "'>" + score + "</td>" +
 	 				"</tr>" +
 	 				"<tr id='player_name_" + id + "' class='name'>" +
-	 					"<td>" + safeName + memberLine + "</td>" +
+	 					"<td><span class='player-podium__rank' aria-label='Current rank'></span>" +
+	 						"<div class='player-podium__name-fit'><span class='player-podium__name-text' data-category-plain='" +
+	 							encodedName + "'>" + safeName + "</span></div>" +
+	 						memberLine + "</td>" +
 	 				"</tr>" +
 	 			"</table>" +
 	 		"</div>";
@@ -629,6 +675,75 @@ $(document).ready(function() {
 
 	 	
 	 }
+
+	function fitHostPodiumNames() {
+		$('.player-podium__name-text').each(function () {
+			var element = this;
+			var container = element.closest('.player-podium__name-fit');
+			if (!container || typeof window.fitJeopardyTextInContainer !== 'function') {
+				return;
+			}
+			var plainName = '';
+			try {
+				plainName = decodeURIComponent(element.getAttribute('data-category-plain') || '');
+			} catch (e) {
+				plainName = element.textContent || '';
+			}
+			window.fitJeopardyTextInContainer(element, container, {
+				text: plainName,
+				minPx: 12,
+				maxPx: 180,
+				noWordBreak: true,
+			});
+		});
+	}
+
+	function scheduleHostPodiumNameFit() {
+		window.requestAnimationFrame(function () {
+			fitHostPodiumNames();
+			window.setTimeout(fitHostPodiumNames, 100);
+		});
+	}
+	var hostPodiumFitResizeTimer = null;
+	$(window).on('resize', function () {
+		window.clearTimeout(hostPodiumFitResizeTimer);
+		hostPodiumFitResizeTimer = window.setTimeout(fitHostPodiumNames, 80);
+	});
+	if (typeof window.ResizeObserver === 'function') {
+		new window.ResizeObserver(function () {
+			window.clearTimeout(hostPodiumFitResizeTimer);
+			hostPodiumFitResizeTimer = window.setTimeout(fitHostPodiumNames, 40);
+		}).observe(document.getElementById('players_table'));
+	}
+
+	function updateHostPodiumRanks() {
+		var standings = playerNames.map(function (name) {
+			var id = nameIds[name];
+			var score = parseInt($('#name_' + id).text(), 10);
+			return { name: name, id: id, score: isNaN(score) ? 0 : score };
+		});
+		standings.sort(function (a, b) {
+			return b.score - a.score;
+		});
+		$('.player-podium').removeClass('player-podium--leader');
+		for (var si = 0; si < standings.length; si++) {
+			var rank =
+				si > 0 && standings[si].score === standings[si - 1].score
+					? $('.player-podium__rank', '#player_podium_' + standings[si - 1].id).text()
+					: String(si + 1);
+			$('.player-podium__rank', '#player_podium_' + standings[si].id).text(rank);
+		}
+		if (
+			standings.length &&
+			(standings.length === 1 ||
+				standings[0].score !== standings[standings.length - 1].score)
+		) {
+			var leadScore = standings[0].score;
+			for (var li = 0; li < standings.length && standings[li].score === leadScore; li++) {
+				$('#player_podium_' + standings[li].id).addClass('player-podium--leader');
+			}
+		}
+	}
 
     function buildBoard(questions, round)
     {
@@ -722,6 +837,8 @@ $(document).ready(function() {
 			buildPlayerBox(snapshot.players[pi].name, snapshot.players[pi].members);
 			$('#name_' + nameIds[snapshot.players[pi].name]).html(snapshot.players[pi].score);
 		}
+		updateHostPodiumRanks();
+		scheduleHostPodiumNameFit();
 		player_login_count = snapshot.players.length;
 	}
 
@@ -732,18 +849,95 @@ $(document).ready(function() {
 		}
 		if (!players || !players.length) {
 			el.html('None yet — open <code>/player</code> on each phone.');
+			$('#host_join_count').text('0 joined');
 			return;
 		}
-		var names = [];
+		el.empty();
 		var i;
 		for (i = 0; i < players.length; i++) {
-			if (gameMode === 'team' && players[i].members && players[i].members.length) {
-				names.push(players[i].name + ' (' + players[i].members.join(' + ') + ')');
-			} else {
-				names.push(players[i].name);
+			var player = players[i];
+			var $row = $('<span>', {
+				class:
+					'host-roster-player ' +
+					(player.online ? 'host-roster-player--online' : 'host-roster-player--offline'),
+			});
+			$row.append($('<span>', { class: 'host-roster-player__status' }));
+			var $name = $('<span>', {
+				class: 'host-roster-player__name',
+				text: player.name,
+			});
+			var memberText =
+				gameMode === 'team' && player.memberDetails && player.memberDetails.length
+					? player.memberDetails
+							.map(function (member) {
+								return member.name + (member.online ? '' : ' (offline)');
+							})
+							.join(' + ')
+					: player.online
+						? player.hasVoted
+							? 'Online · vote ready'
+							: 'Online'
+						: 'Offline';
+			$name.append(
+				$('<small>', {
+					class: 'host-roster-player__meta',
+					text: memberText,
+				})
+			);
+			$row.append($name);
+			if (
+				!hostRosterLocked &&
+				!$(document.body).hasClass('host-board-active')
+			) {
+				$row.append(
+					$('<button>', {
+						type: 'button',
+						class: 'host-roster-player__remove',
+						text: 'Remove',
+						'data-player-name': player.name,
+						'aria-label': 'Remove ' + player.name + ' from this room',
+					})
+				);
 			}
+			el.append($row);
 		}
-		el.text(names.join(', '));
+		var onlineCount = players.filter(function (player) {
+			return player.online;
+		}).length;
+		var minimum = parseInt(hostModeConfig.minContestants, 10) || 3;
+		if (gameMode === 'team') {
+			var memberCount = players.reduce(function (total, player) {
+				return total + ((player.members && player.members.length) || 0);
+			}, 0);
+			var onlineMemberCount = players.reduce(function (total, player) {
+				return total + (parseInt(player.onlineCount, 10) || 0);
+			}, 0);
+			var requiredMembers =
+				minimum * (parseInt(hostModeConfig.maxMembersPerContestant, 10) || 2);
+			$('#host_join_count').text(
+				players.length +
+					' of ' +
+					minimum +
+					' teams · ' +
+					memberCount +
+					' of ' +
+					requiredMembers +
+					' players · ' +
+					onlineMemberCount +
+					' online · ' +
+					(memberCount >= requiredMembers
+						? 'teams full'
+						: requiredMembers - memberCount + ' spots needed')
+			);
+			return;
+		}
+		$('#host_join_count').text(
+			players.length +
+				' joined · ' +
+				onlineCount +
+				' online · ' +
+				(players.length >= minimum ? 'minimum reached' : minimum - players.length + ' more needed')
+		);
 	}
 
 	function updateHostJoinedPlayersPanelFromLocalState() {
@@ -791,6 +985,7 @@ $(document).ready(function() {
 		}
 		gameMode = snapshot.mode || gameMode;
 		var config = snapshot.modeConfig || {};
+		hostModeConfig = config;
 		$('#host_mode_badge').text(config.label || gameMode.toUpperCase() + ' JEOPARDY');
 		$(document.body)
 			.removeClass('host-mode-standard host-mode-team host-mode-open')
@@ -901,6 +1096,21 @@ $(document).ready(function() {
 			return;
 		}
 		applyHostRoomConfiguration(snapshot);
+		if (!snapshot.gameActive) {
+			setHostGameState('lobby', 'LOBBY', 'Waiting for players');
+		} else if (snapshot.clueInProgress) {
+			setHostGameState(
+				snapshot.buzzedInPlayerName ? 'answering' : 'reading',
+				snapshot.buzzedInPlayerName ? 'ANSWERING' : 'CLUE IN PLAY',
+				snapshot.buzzedInPlayerName || 'Clue in progress'
+			);
+		} else {
+			setHostGameState(
+				'selecting',
+				'SELECTING A CLUE',
+				snapshot.activePlayerName || 'Board is open'
+			);
+		}
 		var full = applyHostSnapshot(snapshot);
 		if (full) {
 			console.log('Host UI restored from server snapshot');
@@ -936,7 +1146,18 @@ $(document).ready(function() {
 	});
 
 	socket.on('setup voting started', function () {
+		hostRosterLocked = true;
 		$('#host_start_setup_btn').prop('hidden', true);
+		$('.host-roster-player__remove').remove();
+		setHostGameState('voting', 'VOTING', 'Players are choosing game settings');
+	});
+
+	$('#host_player_roster_names').on('click', '.host-roster-player__remove', function () {
+		var name = String($(this).attr('data-player-name') || '');
+		if (!name || !window.confirm('Remove ' + name + ' from this room?')) {
+			return;
+		}
+		socket.emit('host remove contestant', name);
 	});
 
 	//populate game board
@@ -980,6 +1201,11 @@ $(document).ready(function() {
 	var nextRoundNeeded = false; //check if question is live, then if it is we enable this flag to go into next round the next time active player would usually be called
 	//when a new player becomes active
 	socket.on('active player',function(data){
+			setHostGameState(
+				'selecting',
+				'SELECTING A CLUE',
+				(data && data.playerName ? data.playerName : 'A player') + ' has board control'
+			);
 
 			if (roundTimer <= 0)
 			{	
@@ -1014,12 +1240,12 @@ $(document).ready(function() {
 		   							getSoundAndFadeAudio(dateSoundEffect);
 				   					setTimeout(function(){
 						   				animateBoard(true);
-						   				setTimeout(function(){messageToVoice("Hello and welcome to Jeopardy! These are todays categories", false)}, 4000);
-						   				setTimeout(function(){categoryAnimate(data.playerName)}, 7000);
+						   				setTimeout(function(){messageToVoice("Hello and welcome to Jeopardy! These are todays categories", false)}, 1800);
+						   				setTimeout(function(){categoryAnimate(data.playerName)}, 3200);
 						   				activePlayerName = data.playerName;
 					   				}, 1000);
 		   						});
-			   				}, 6000);
+			   				}, 2800);
 				   			  
 			   			});
 		   			}, 2000);
@@ -1192,6 +1418,11 @@ $(document).ready(function() {
 
 	socket.on('next round start confirmed', function(activePlayerReceive){
 		activePlayerName = activePlayerReceive;
+		setHostGameState(
+			'round-transition',
+			finalJeopardyCheck ? 'FINAL JEOPARDY' : 'NEXT ROUND',
+			'Preparing the next round'
+		);
 		nextRoundOrdered();
 	});
 
@@ -1816,6 +2047,7 @@ $(document).ready(function() {
 
 	//capture question reveal
 	  socket.on('question reveal',function(question){
+	  	setHostGameState('reading', 'READING CLUE', 'Buzzers are locked until reading ends');
 	  	timerCount = 6;
 	  	questionIsLive = true;
 	  	flushHostSpeech();
@@ -1890,6 +2122,11 @@ $(document).ready(function() {
 	 socket.on('buzzer pressed', function(pressed){
 	 	if(!lockPlayers)
 	 	{
+	 		setHostGameState(
+	 			'answering',
+	 			'ANSWERING',
+	 			(pressed.memberName || pressed.playerName) + ' buzzed in'
+	 		);
 	 		socket.emit('buzzer pressed confirmed', pressed);
 		 	console.log('buzzer pressed');
 		 	socket.emit('close buzzer');
@@ -1907,6 +2144,12 @@ $(document).ready(function() {
 	 	hideHostAiJudging();
 	 	var openQuestionsSwitch = true;
 	 	$('#name_' + nameIds[score.playerName]).html(score.score);
+	 	updateHostPodiumRanks();
+	 	setHostGameState(
+	 		score.correct ? 'correct' : 'incorrect',
+	 		score.correct ? 'CORRECT' : 'INCORRECT',
+	 		score.playerName + ' · ' + score.score
+	 	);
 	 	//stopSound(clockCountdown);
 
 	 	hidePopup(score.playerName);
@@ -2065,6 +2308,7 @@ $(document).ready(function() {
 
 	socket.on('countdown', function(data){
  		//beginCountdown(data.questionId, data.timerCount);  CAUSING GLITCH?
+ 		setHostGameState('buzzers-open', 'BUZZERS OPEN', 'Players may buzz now');
  		socket.emit('open buzzer');
 	});
 
@@ -2386,7 +2630,7 @@ $(document).ready(function() {
     			fx: 'scrollRight',
     			next: '#category_container',
     			speed: 100,
-    			timeout: 4200,
+    			timeout: 2400,
     			after: function () {
     				if (index < categories.length) {
     					messageToVoice(categories[index].toLowerCase(), false, null, {
@@ -2421,11 +2665,13 @@ $(document).ready(function() {
     }
 	function moveActiveIndicator(name)
 	{
+		$('.player-podium').removeClass('player-podium--active');
 		for(nameId in nameIds)
 		{
 			$('#active_indicator_' + nameIds[nameId] + " td").html('WAITING');
 		}
 		$('#active_indicator_' + nameIds[name] + " td").html("ACTIVE");
+		$('#player_podium_' + nameIds[name]).addClass('player-podium--active');
 	}	
 
 	function flashBuzzer(name)
@@ -2735,6 +2981,7 @@ $(document).ready(function() {
     function updateScore(playerName, score)
     {
     	$("#name_" + nameIds[playerName]).html(score);
+    	updateHostPodiumRanks();
     }
 
     function playSound(soundName)

@@ -1,4 +1,10 @@
 $(document).ready(function() {
+	if (
+		window.matchMedia &&
+		window.matchMedia('(prefers-reduced-motion: reduce)').matches
+	) {
+		$.fx.off = true;
+	}
 	// To add to window
 	if(typeof Promise !== "undefined" && Promise.toString().indexOf("[native code]") !== -1){
 	    console.log("PROMISES WORK!");
@@ -13,6 +19,9 @@ $(document).ready(function() {
 	var gameMode = 'standard';
 	var roomConfiguration = null;
 	var roomConfigurationLoaded = false;
+	var teamSelectionState = { teams: [], canCreate: false, registrationClosed: false };
+	var suggestedTeamName = '';
+	var creatingNewTeam = false;
 	var playerScore = 0;
 	var activePlayerName;
 	var curQuestionId = '';
@@ -42,25 +51,52 @@ $(document).ready(function() {
 	socket.on('room configuration', function (config) {
 		roomConfiguration = config || {};
 		gameMode = roomConfiguration.mode || 'standard';
+		teamSelectionState = roomConfiguration.teamSelection || teamSelectionState;
+		suggestedTeamName = String(roomConfiguration.suggestedTeamName || '').trim().toUpperCase();
 		roomConfigurationLoaded = true;
 		$('#player_mode_label').text(roomConfiguration.label || 'JEOPARDY');
 		$('#team_name_field').prop('hidden', gameMode !== 'team');
-		$('#join_btn').prop(
-			'disabled',
-			!String($('#login_name').val() || '').trim() ||
-				(gameMode === 'team' && !String($('#login_team_name').val() || '').trim())
-		);
+		renderTeamSelection();
+		updateJoinButtonState();
 		attemptAutoLoginFromStorage();
+	});
+	socket.on('team selection update', function (state) {
+		teamSelectionState = state || { teams: [], canCreate: false, registrationClosed: true };
+		renderTeamSelection();
+		updateJoinButtonState();
+	});
+	socket.on('player login accepted', function (payload) {
+		var acceptedTeam = String(payload && payload.contestantName || '').trim().toUpperCase();
+		var acceptedMember = String(payload && payload.memberName || memberName || '').trim().toUpperCase();
+		if (acceptedTeam) {
+			playerName = acceptedTeam;
+		}
+		if (acceptedMember) {
+			memberName = acceptedMember;
+		}
+		if (gameMode === 'team') {
+			persistTeamName(playerName);
+			creatingNewTeam = false;
+			$('#login_team_name').val(playerName);
+		}
+		updatePlayerIdentityDisplay();
 	});
 	socket.on('player login rejected', function (payload) {
 		playerName = null;
 		memberName = null;
-		$('#join_btn').prop('disabled', false);
+		updateJoinButtonState();
 		SimpleModal.alert({
 			title: 'Could not join',
 			text: (payload && payload.message) || 'Check your name and try again.',
 			type: 'error',
 		});
+	});
+	socket.on('contestant removed', function (contestantName) {
+		if (contestantName !== playerName) {
+			return;
+		}
+		window.alert('The host removed you from this room.');
+		window.location.replace('/home');
 	});
 	var buzzerLock=false;
 	var finalJeopardyCheck = false;
@@ -72,6 +108,7 @@ $(document).ready(function() {
 	var buzzerOpen = false;
 	var finalJeopardyAnswered = false; //used to determine if a player answered the final jeopardy question for scoring purposes
 	var answerTime = 15;
+	var playerConnectionOnline = false;
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR =  "../../game-media/images/";
 	var PLAYER_NAME_STORAGE_KEY = 'jeopardy.playerName';
@@ -79,6 +116,45 @@ $(document).ready(function() {
 	var CLIENT_ID_STORAGE_KEY = 'jeopardy.clientId';
 	var autoLoginFromStorageDone = false;
 	var waitForStartGameTimer = null;
+
+	function setPlayerConnectionState(state, label) {
+		var wrap = $('#player_connection_status');
+		wrap
+			.removeClass(
+				'player-connection-status--connecting player-connection-status--online player-connection-status--offline'
+			)
+			.addClass('player-connection-status--' + state);
+		$('#player_connection_status_text').text(label);
+		playerConnectionOnline = state === 'online';
+		if (!playerConnectionOnline) {
+			$('.buzzer, #answer_btn, #bet_btn').prop('disabled', true);
+		} else {
+			$('#answer_btn, #bet_btn').prop('disabled', false);
+			$('.buzzer').prop('disabled', !buzzerOpen);
+		}
+	}
+
+	function setPlayerBuzzerState(state, label, buttonLabel) {
+		var wrap = $('.player_buzzer');
+		wrap
+			.removeClass(
+				'player_buzzer--waiting player_buzzer--ready player_buzzer--open player_buzzer--taken player_buzzer--answering player_buzzer--submitted'
+			)
+			.addClass('player_buzzer--' + state);
+		$('#player_buzzer_status').text(label);
+		$('.buzzer')
+			.text(buttonLabel || label)
+			.prop('disabled', state !== 'open' || !playerConnectionOnline)
+			.attr('aria-label', label);
+	}
+
+	function vibratePlayer(pattern) {
+		if (navigator.vibrate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+			try {
+				navigator.vibrate(pattern);
+			} catch (e) { /* unsupported or blocked */ }
+		}
+	}
 
 	function getClientId() {
 		try {
@@ -132,12 +208,129 @@ $(document).ready(function() {
 		} catch (e) { /* private mode / quota */ }
 	}
 
-	function loginPayload(person, team) {
+	function updateJoinButtonState() {
+		var missingName = !String($('#login_name').val() || '').trim();
+		var missingTeam =
+			gameMode === 'team' && !String($('#login_team_name').val() || '').trim();
+		$('#join_btn').prop('disabled', missingName || missingTeam);
+	}
+
+	function selectTeamOption(teamName, createNew) {
+		var normalized = String(teamName || '').trim().toUpperCase();
+		creatingNewTeam = !!createNew;
+		$('#login_team_name').val(normalized);
+		$('#login_team_create').val(creatingNewTeam ? 'true' : 'false');
+		$('.team-selection-card')
+			.removeClass('team-selection-card--selected')
+			.attr('aria-pressed', 'false');
+		if (creatingNewTeam) {
+			$('#create_team_option')
+				.addClass('team-selection-card--selected')
+				.attr('aria-pressed', 'true');
+			$('#team_selection_status').text('New team selected: ' + normalized);
+		} else {
+			$('.team-selection-card[data-team-name="' + encodeURIComponent(normalized) + '"]')
+				.addClass('team-selection-card--selected')
+				.attr('aria-pressed', 'true');
+			$('#team_selection_status').text('Joining ' + normalized);
+		}
+		updateJoinButtonState();
+	}
+
+	function renderTeamSelection() {
+		if (gameMode !== 'team') {
+			return;
+		}
+		var options = $('#team_selection_options').empty();
+		var selectedName = String($('#login_team_name').val() || '').trim().toUpperCase();
+		var savedTeam = readStoredTeamName();
+		var teams = Array.isArray(teamSelectionState.teams) ? teamSelectionState.teams : [];
+		teams.forEach(function (team) {
+			var name = String(team.name || '').trim().toUpperCase();
+			var reconnectingToSavedTeam = name === savedTeam;
+			var enabled = !!team.available || reconnectingToSavedTeam;
+			var memberLabel =
+				team.memberCount +
+				' of ' +
+				team.maxMembers +
+				(team.memberCount === 1 ? ' player' : ' players');
+			var button = $('<button>', {
+				type: 'button',
+				class: 'team-selection-card',
+				'data-team-name': encodeURIComponent(name),
+				'aria-pressed': 'false',
+				disabled: !enabled,
+			});
+			button.append($('<strong>', { text: name }));
+			button.append(
+				$('<span>', {
+					text: enabled ? memberLabel + ' · Join this team' : memberLabel + ' · Team full',
+				})
+			);
+			options.append(button);
+		});
+		if (!teams.length) {
+			options.append(
+				$('<p>', {
+					class: 'team-selection-empty',
+					text: 'No teams yet — create the first one.',
+				})
+			);
+		}
+		$('#suggested_team_name').text(suggestedTeamName || 'New team');
+		$('#create_team_option').prop(
+			'disabled',
+			!teamSelectionState.canCreate || teamSelectionState.registrationClosed
+		);
+		if (
+			!creatingNewTeam &&
+			selectedName &&
+			teams.some(function (team) {
+				var name = String(team.name || '').trim().toUpperCase();
+				return name === selectedName && (!!team.available || name === savedTeam);
+			})
+		) {
+			selectTeamOption(selectedName, false);
+		} else if (creatingNewTeam && suggestedTeamName) {
+			selectTeamOption(suggestedTeamName, true);
+		} else {
+			$('#login_team_name').val('');
+			$('#team_selection_status').text(
+				teamSelectionState.registrationClosed
+					? 'Team selection is closed.'
+					: 'Select a team to continue.'
+			);
+		}
+	}
+
+	function loginPayload(person, team, createNew) {
 		return {
 			memberName: person,
 			teamName: gameMode === 'team' ? team : '',
+			createTeam: gameMode === 'team' && !!createNew,
 			clientId: playerClientId,
 		};
+	}
+
+	function updatePlayerIdentityDisplay() {
+		var el = $('#player_name');
+		if (!el.length) {
+			return;
+		}
+		el.empty();
+		if (gameMode === 'team') {
+			el.append(
+				$('<span>', { class: 'player-identity__team', text: playerName })
+			);
+			el.append(
+				$('<small>', {
+					class: 'player-identity__member',
+					text: 'You: ' + memberName,
+				})
+			);
+		} else {
+			el.text(playerName);
+		}
 	}
 
 	function beginPlayerJoin(loginNameStripped, teamNameStripped) {
@@ -151,9 +344,7 @@ $(document).ready(function() {
 			$('.player_field_info').append("<h2 id='player_name'></h2>");
 			$('.player_field_info').append("<h2 id='player_score'>0</h2>");
 		}
-		$('#player_name').text(
-			gameMode === 'team' ? playerName + ' · ' + memberName : playerName
-		);
+		updatePlayerIdentityDisplay();
 		$('#player_score').html('0');
 	}
 
@@ -169,12 +360,20 @@ $(document).ready(function() {
 		if (gameMode === 'team' && !savedTeam) {
 			return;
 		}
+		if (
+			gameMode === 'team' &&
+			!teamSelectionState.teams.some(function (team) {
+				return String(team.name || '').trim().toUpperCase() === savedTeam;
+			})
+		) {
+			return;
+		}
 		autoLoginFromStorageDone = true;
 		$('#login_name').val(saved);
 		$('#login_team_name').val(savedTeam);
 		$('#join_btn').prop('disabled', true);
 		beginPlayerJoin(saved, savedTeam);
-		socket.emit('login name', loginPayload(saved, savedTeam));
+		socket.emit('login name', loginPayload(saved, savedTeam, false));
 	}
 
 	var speechRecognition = null;
@@ -193,10 +392,14 @@ $(document).ready(function() {
 	$('.restart').css('display', 'none');
 	$('.player_field').css('display', 'none');
 	$('.game_options').hide();
+	setPlayerBuzzerState('waiting', 'WAITING FOR CLUE', 'WAIT');
 
 	function beginCountdown(buzzerTime)
 	{
 		console.log(buzzerTime);
+		$('#player_answer_countdown').text(
+			Math.max(0, parseInt(buzzerTime, 10) || 0) + 's'
+		);
 		
 		drawTimeBlocks(buzzerTime);
 
@@ -333,9 +536,7 @@ $(document).ready(function() {
 			$('.player_field_info').append("<h2 id='player_name'></h2>");
 			$('.player_field_info').append("<h2 id='player_score'>" + playerScore + "</h2>");
 		}
-		$('#player_name').text(
-			gameMode === 'team' ? playerName + ' · ' + memberName : playerName
-		);
+		updatePlayerIdentityDisplay();
 		$('#player_score').html(playerScore);
 		staticMessageOff();
 
@@ -383,13 +584,21 @@ $(document).ready(function() {
 			if (buzzedName) {
 				if (buzzedClientId === playerClientId) {
 					buzzerLock = true;
+					setPlayerBuzzerState('answering', 'YOU BUZZED IN — ANSWER NOW', 'ANSWER NOW');
 					switchBuzzer(false);
 					var bic = state['buzzed-in-timer-count'];
 					beginCountdown(typeof bic === 'number' ? bic : answerTime);
 				} else {
+					switchBuzzer(true);
 					if (buzzedName === playerName) {
 						buzzerLock = true;
 					}
+					setPlayerBuzzerState(
+						'taken',
+						(buzzedMember || buzzedName) +
+							(gameMode === 'team' ? ' BUZZED FOR ' + buzzedName : ' BUZZED IN'),
+						'TAKEN'
+					);
 					postScreenMessage(
 						(buzzedMember || buzzedName) +
 							(gameMode === 'team' ? ' buzzed in for ' + buzzedName : '') +
@@ -400,6 +609,7 @@ $(document).ready(function() {
 				}
 			} else if (state['player-buzzer-unlocked'] && !state['buzzer-flipped']) {
 				buzzerOpen = true;
+				setPlayerBuzzerState('open', 'BUZZ NOW', 'BUZZ IN');
 				$('.buzzer').css('background-color', 'rgb(76, 175, 80)');
 			}
 			$('#tempGAME').stop(true, true).hide();
@@ -493,6 +703,7 @@ $(document).ready(function() {
 		{
 			$(".player_buzzer").css("display", "none");
 			$(".player_answer_field").css("display", "block");
+			$('#player_answer_countdown').text(answerTime + 's');
 			focusAnswerFieldWithMobileKeyboard();
 		}
 	}
@@ -514,15 +725,28 @@ $(document).ready(function() {
 		autoLoginFromStorageDone = true;
 		$('#login_name').val('');
 		$('#login_team_name').val('');
-		$('#join_btn').prop('disabled', true);
+		creatingNewTeam = false;
+		renderTeamSelection();
+		updateJoinButtonState();
 		$('#jeopardy_saved_name_hint').prop('hidden', true);
 	});
 
-	$('#login_name, #login_team_name').on('input keyup', function (event) {
-		var missingName = !String($('#login_name').val() || '').trim();
-		var missingTeam =
-			gameMode === 'team' && !String($('#login_team_name').val() || '').trim();
-		$('#join_btn').prop('disabled', missingName || missingTeam);
+	$('#team_selection_options').on('click', '.team-selection-card', function () {
+		if ($(this).prop('disabled')) {
+			return;
+		}
+		selectTeamOption(decodeURIComponent(String($(this).attr('data-team-name') || '')), false);
+	});
+
+	$('#create_team_option').on('click', function () {
+		if ($(this).prop('disabled')) {
+			return;
+		}
+		selectTeamOption(suggestedTeamName, true);
+	});
+
+	$('#login_name').on('input keyup', function (event) {
+		updateJoinButtonState();
 		if (event.which === 13) {
 			$(this).blur();
 		}
@@ -541,7 +765,7 @@ $(document).ready(function() {
 	  		{
 	  			SimpleModal.alert({
 				  title: "Oops!",
-				  text: gameMode === 'team' ? "Please enter your name and team name." : "Please enter a name.",
+				  text: gameMode === 'team' ? "Please enter your name and choose a team." : "Please enter a name.",
 				  timer: 2000
 				});
 	  		}
@@ -550,7 +774,10 @@ $(document).ready(function() {
 	  			$('#join_btn').prop('disabled', true);
 	  			autoLoginFromStorageDone = true;
 	  			beginPlayerJoin(loginNameStripped, teamNameStripped);
-	  			socket.emit('login name', loginPayload(loginNameStripped, teamNameStripped));
+	  			socket.emit(
+	  				'login name',
+	  				loginPayload(loginNameStripped, teamNameStripped, creatingNewTeam)
+	  			);
         	}
         	return false;
       });
@@ -682,7 +909,7 @@ $(document).ready(function() {
 	function finishOptionsPhaseAndShowField() {
 		setVoteFeedback('', false);
 		$('.game_options').css('display', 'none');
-		postScreenMessage('Please wait for the game to begin.', false, 0);
+		showWaitForStartScreen();
 		setTimeout(function () {
 			$('#login_container').css('display', 'none');
 			$('.player_field').css('display', 'block');
@@ -721,7 +948,7 @@ $(document).ready(function() {
 		  		/* Keep the buzzer field hidden until setup is done so Open-mode
 		  		   voting cannot reveal it underneath the options panel. */
 		  		$('.player_field').css('display', 'none');
-		  		postScreenMessage("Please wait for the game to begin.", false, 0);
+		  		showWaitForStartScreen();
 		  		clearTimeout(waitForStartGameTimer);
 		  		waitForStartGameTimer = setTimeout(function(){
 		  			waitForStartGameTimer = null;
@@ -747,6 +974,13 @@ $(document).ready(function() {
 
 	   		blockClicks = false;
 	   		listenForClicks = false;
+	   		setPlayerBuzzerState(
+	   			'waiting',
+	   			data.playerName === playerName
+	   				? 'YOU HAVE BOARD CONTROL'
+	   				: 'WAITING FOR ' + data.playerName,
+	   			'WAIT'
+	   		);
 
 	   		if (data.newGame == "new game")
 	   		{
@@ -789,6 +1023,11 @@ $(document).ready(function() {
 	  });
 
 	   socket.on('open question category', function(playerNameActive){ //open categories for selection
+	   	setPlayerBuzzerState(
+	   		'waiting',
+	   		playerNameActive === playerName ? 'PICK A CLUE' : 'CLUE SELECTION',
+	   		'WAIT'
+	   	);
 	   	if (playerNameActive == playerName)
 	   	{
 	   		staticMessageOff();
@@ -860,6 +1099,14 @@ $(document).ready(function() {
 		}
 	  });
 
+	  $('.player_field').on('keydown', '#tempGAME td[role="button"]', function (e) {
+	  	if (e.key !== 'Enter' && e.key !== ' ') {
+	  		return;
+	  	}
+	  	e.preventDefault();
+	  	$(this).trigger('click');
+	  });
+
 	   //capture question elimination sync, also when time runs out and no on answers
 	  socket.on('question disappear',function(questionId){
 	  	eliminateQuestion(questionId);
@@ -871,6 +1118,7 @@ $(document).ready(function() {
 	  	displayCategories(false);
 	  	eliminateQuestion(question.questionId);
 	  	listenForClicks = true;
+	  	setPlayerBuzzerState('ready', 'GET READY — CLUE IS BEING READ', 'GET READY');
 	  	pressedAnswer = false;
 	  	//daily double?
 	  	curQuestionId = question.questionId;
@@ -890,6 +1138,7 @@ $(document).ready(function() {
 	  });
 
 	  socket.on('expose question', function(){
+	  	setPlayerBuzzerState('ready', 'GET READY — BUZZERS OPEN SOON', 'GET READY');
 	  	console.log("THIS PLAYER EXPOSED QUESTION DEVICE IS: " + playerName);
 	  	socket.emit("expose question test", "THIS PLAYER EXPOSED QUESTION DEVICE IS: " + playerName);
 	  	$("#question_revealed").slideDown(1500, function () {
@@ -909,6 +1158,7 @@ $(document).ready(function() {
 	  		}
 	  		if(timesUp.playerName == playerName)
 	  		{
+	  			setPlayerBuzzerState('submitted', 'TIME EXPIRED — ANSWER CLOSED', 'TIME UP');
 	  			$(".buzzer").css("background-color", "rgb(105,105,105)");
 	  			postScreenMessage("Just relax and let the other players do the thinking.", false, 0);
 	  		}
@@ -926,6 +1176,7 @@ $(document).ready(function() {
 	  	if (questionTimerServer <= 0)
 	  	{
 	  	  buzzerOpen = false;
+	  	  setPlayerBuzzerState('waiting', 'TIME EXPIRED', 'WAIT');
 	  	  //$(".buzzer").prop("disabled",true);
 	 	  $(".buzzer").css("background-color", "rgb(105,105,105)");
 	  	}
@@ -944,6 +1195,7 @@ $(document).ready(function() {
 					setTimeout(function(){
 						console.log("clicks open");
 						buzzerOpen = true;
+						setPlayerBuzzerState('open', 'BUZZ NOW', 'BUZZ IN');
 						//$(".buzzer").prop("disabled",false);
 		  				$(".buzzer").css("background-color", "rgb(76, 175, 80)");
 					}, 500);
@@ -952,6 +1204,7 @@ $(document).ready(function() {
 				{
 					console.log("buzzer open");
 					buzzerOpen = true;
+					setPlayerBuzzerState('open', 'BUZZ NOW', 'BUZZ IN');
 		  			//$(".buzzer").prop("disabled",false);
 		  			$(".buzzer").css("background-color", "rgb(76, 175, 80)");
 	  			}
@@ -961,6 +1214,9 @@ $(document).ready(function() {
 	  //buzzers are off
 	 socket.on('close buzzer',function(){
 		buzzerOpen = false;
+		if (!$('.player_answer_field').is(':visible')) {
+			setPlayerBuzzerState('waiting', 'BUZZERS LOCKED', 'LOCKED');
+		}
 		//$(".buzzer").prop("disabled",true);
 		$(".buzzer").css("background-color", "rgb(105,105,105)");
 	  });
@@ -978,6 +1234,7 @@ $(document).ready(function() {
 			if (buzzerOpen)
 			{
 				console.log("buzzer pressed: " + playerName);
+				vibratePlayer([35, 30, 35]);
 				socket.emit('buzzer pressed', playerName);
 			}
 		}
@@ -991,6 +1248,12 @@ $(document).ready(function() {
 	 			buzzerLock = true;
 	 		}
 	 		var responder = pressed.memberName || pressed.playerName;
+	 		setPlayerBuzzerState(
+	 			'taken',
+	 			responder +
+	 				(gameMode === 'team' ? ' BUZZED FOR ' + pressed.playerName : ' BUZZED IN'),
+	 			'TAKEN'
+	 		);
 	 		postScreenMessage(
 	 			responder +
 	 				(gameMode === 'team' ? ' buzzed in for ' + pressed.playerName : '') +
@@ -1001,6 +1264,8 @@ $(document).ready(function() {
 	 	}
 	 	else
 	 	{
+	 		setPlayerBuzzerState('answering', 'YOU BUZZED IN — ANSWER NOW', 'ANSWER NOW');
+	 		vibratePlayer(80);
 	 		//start timer
 	  		beginCountdown(answerTime);
 	 		switchBuzzer(false);
@@ -1045,6 +1310,9 @@ $(document).ready(function() {
 	 function updateDailyDoubleTimer(dailyDoubleTimerCount, dailyDoublePlayerName)
 	 {
  		if (playerName == dailyDoublePlayerName){
+			$('#player_answer_countdown').text(
+				Math.max(0, parseInt(dailyDoubleTimerCount, 10) || 0) + 's'
+			);
 			
 			drawTimeBlocks(dailyDoubleTimerCount);
 
@@ -1104,6 +1372,8 @@ $(document).ready(function() {
 			}
 			else{
 				pressedAnswer = true;
+				setPlayerBuzzerState('submitted', 'ANSWER LOCKED IN', 'SUBMITTED');
+				$('#player_answer_countdown').text('LOCKED');
 				switchBuzzer(true);
 		  		endCountdown();
 		  		console.log(playerName);
@@ -1160,6 +1430,17 @@ $(document).ready(function() {
 	 	}
 	 	if (!finalJeopardyCheck)
 	 	{
+		 	setPlayerBuzzerState(
+		 		score.correct || score.allPlayersAnswered || score.dailyDouble
+		 			? 'waiting'
+		 			: 'taken',
+		 		score.correct
+		 			? 'CORRECT — WATCH THE HOST SCREEN'
+		 			: score.allPlayersAnswered || score.dailyDouble
+		 				? 'CLUE COMPLETE'
+		 				: 'INCORRECT — OTHER PLAYERS MAY BUZZ',
+		 		'WAIT'
+		 	);
 		 	if (score.allPlayersAnswered || score.correct || score.dailyDouble)
 		 	{
 		 		eliminateQuestion(score.questionId);
@@ -1344,10 +1625,27 @@ $(document).ready(function() {
 		if (display)
 		{
 			clicked = false;
+			var $headers = $('#tempGAME tr:first-child th');
+			$('#tempGAME tr:not(:first-child) td').each(function () {
+				var $cell = $(this);
+				var value = String($cell.text() || '').trim();
+				if (!value) {
+					$cell.attr({ tabindex: '-1', 'aria-disabled': 'true' }).removeAttr('role');
+					return;
+				}
+				var category = String($headers.eq($cell.index()).text() || '').trim();
+				$cell.attr({
+					role: 'button',
+					tabindex: '0',
+					'aria-disabled': 'false',
+					'aria-label': (category ? category + ' for ' : 'Clue for ') + value,
+				});
+			});
 			$('#tempGAME').fadeIn('fast');	
 		}	
 		else
 		{
+			$('#tempGAME td').attr('tabindex', '-1');
 			$('#tempGAME').fadeOut('slow');
 		}
 	}
@@ -1488,6 +1786,52 @@ $(document).ready(function() {
 	 	return {message: "Valid", isValid: true};
 	 }
 
+	function escapeHtml(value) {
+		return String(value == null ? '' : value)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;');
+	}
+
+	function showWaitForStartScreen() {
+		var modeLabel =
+			(roomConfiguration && roomConfiguration.label) ||
+			(gameMode === 'team'
+				? 'TEAM JEOPARDY'
+				: gameMode === 'open'
+					? 'OPEN JEOPARDY'
+					: 'STANDARD JEOPARDY');
+		var roomCode =
+			(roomConfiguration && roomConfiguration.code) || playerRoomCode || '—';
+		var yourName = memberName || playerName || '—';
+		var rows =
+			'<div><dt>Game mode</dt><dd>' +
+			escapeHtml(modeLabel) +
+			'</dd></div>' +
+			'<div><dt>Room code</dt><dd>' +
+			escapeHtml(roomCode) +
+			'</dd></div>' +
+			'<div><dt>Your name</dt><dd>' +
+			escapeHtml(yourName) +
+			'</dd></div>';
+		if (gameMode === 'team') {
+			rows +=
+				'<div><dt>Team</dt><dd>' +
+				escapeHtml(playerName || '—') +
+				'</dd></div>';
+		}
+		$('#message_overlay').fadeIn('slow');
+		$('#message_overlay').html(
+			'<div class="player-wait-panel">' +
+				'<h2 class="player-wait-panel__title">Please wait for the game to begin.</h2>' +
+				'<dl class="player-wait-panel__meta">' +
+				rows +
+				'</dl>' +
+				'</div>'
+		);
+	}
+
 	//TODO: this function will post a message overlay on top of the board that will fade out.  handy for any alerts
 	function postScreenMessage(message, needsFadeOut, time, callback)
 	{
@@ -1616,12 +1960,26 @@ $(document).ready(function() {
 	}
 
 	socket.on('reconnect', function () {
+		setPlayerConnectionState('online', 'Connected');
 		if (playerName && memberName) {
 			socket.emit('login name', loginPayload(memberName, playerName));
 		}
 	});
 
+	socket.on('connect', function () {
+		setPlayerConnectionState('online', 'Connected');
+	});
+	socket.on('disconnect', function () {
+		buzzerOpen = false;
+		setPlayerConnectionState('offline', 'Reconnecting…');
+		setPlayerBuzzerState('waiting', 'CONNECTION LOST — PLEASE WAIT', 'OFFLINE');
+	});
+	socket.on('reconnecting', function () {
+		setPlayerConnectionState('connecting', 'Reconnecting…');
+	});
+
 	if (socket.connected) {
+		setPlayerConnectionState('online', 'Connected');
 		attemptAutoLoginFromStorage();
 	} else {
 		socket.on('connect', attemptAutoLoginFromStorage);

@@ -26,7 +26,13 @@ body,html{width:100%;height:100%;}
  position:relative;
  margin:auto;}
 
-#login_name, #login_team_name{
+/* Hard board shadow makes dense form text look doubled — keep login readable. */
+#login_container,
+#login_container * {
+  text-shadow: none;
+}
+
+#login_name{
   display:block;
     width: 100%;
     padding: 15px 0 15px 0px;
@@ -37,7 +43,6 @@ body,html{width:100%;height:100%;}
     border: none;
     outline: none;
     color: #fff;
-    text-shadow: var(--jeopardy-text-shadow);
     border: 1px solid rgba(0,0,0,0.3);
     border-radius: 4px;
     box-shadow: inset 0 -5px 45px rgba(100,100,100,0.2), 0 1px  1px rgba(255,255,255,0.2);
@@ -46,7 +51,7 @@ body,html{width:100%;height:100%;}
     position: relative;
     font-size: 13px;
 }
-#login_name:focus, #login_team_name:focus{
+#login_name:focus{
     text-indent: 12px;
     box-shadow: inset 0 -5px 45px rgba(100,100,100,0.4), 0 1px 1px rgba(255,255,255,0.2);
 }
@@ -59,19 +64,91 @@ body,html{width:100%;height:100%;}
   letter-spacing: 0.08em;
   text-align: center;
   text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 .team-name-field {
   margin-top: 18px;
+  padding: 0;
+  border: 0;
   text-align: left;
 }
-.team-name-field label {
-  margin-bottom: 8px;
+.team-name-field legend {
+  width: 100%;
+  padding: 0;
+  color: #fff;
+  font-family: 'Korinna', sans-serif;
+  font-size: 18px;
+  text-align: center;
 }
-.team-name-field p {
+.team-name-field > p {
   margin: 7px 2px 0;
   color: rgba(255, 255, 255, 0.75);
   font-size: 12px;
   line-height: 1.35;
+  text-align: center;
+}
+.team-selection-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.team-selection-card {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-family: 'Korinna', sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+.team-selection-card strong {
+  overflow-wrap: anywhere;
+  color: #ffea00;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+}
+.team-selection-card span {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 11px;
+  line-height: 1.25;
+}
+.team-selection-card:hover:not(:disabled),
+.team-selection-card:focus-visible {
+  border-color: #ffea00;
+  background: rgba(0, 0, 0, 0.48);
+}
+.team-selection-card--selected {
+  border-color: #ffea00;
+  box-shadow: 0 0 0 2px rgba(255, 234, 0, 0.22);
+}
+.team-selection-card:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+.team-selection-card--create {
+  margin-top: 10px;
+  background: rgba(20, 50, 90, 0.48);
+}
+.team-selection-card .team-selection-card__eyebrow {
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+.team-selection-status {
+  min-height: 16px;
+}
+@media (max-height: 680px) {
+  .login {
+    top: 48%;
+  }
+  .team-selection-card {
+    padding: 8px 11px;
+  }
 }
 
 label{
