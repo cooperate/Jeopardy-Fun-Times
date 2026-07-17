@@ -13,6 +13,11 @@ const { parseMediaType, parseAnswer } = require('./lib/parsers');
 const { evaluateAnswer } = require('./lib/evaluateAnswer');
 const { searchCommonsImage } = require('./lib/wikimediaImageSearch');
 const {
+	validateDailyDoubleWager,
+	validateFinalJeopardyWager,
+	isValidAnswer,
+} = require('./lib/gameRules');
+const {
 	createGameRoom,
 	normalizeRoomCode: normRoom,
 	generateUniqueRoomCode,
@@ -29,28 +34,23 @@ var gameRooms = new Map();
 
 /** How long players have to submit a Final Jeopardy wager before defaults are applied. */
 var FINAL_JEOPARDY_WAGER_TIMEOUT_MS = 45000;
+var FINAL_JEOPARDY_ANSWER_TIMEOUT_MS = 32500;
+var ROOM_IDLE_TTL_MS = 6 * 60 * 60 * 1000;
 
-function getMaxFinalJeopardyWager(score) {
-	score = parseInt(score, 10);
-	if (isNaN(score)) {
-		score = 0;
-	}
-	if (score >= 1000) {
-		return score;
-	}
-	return 1000;
+function createHostToken() {
+	return crypto.randomBytes(32).toString('base64url');
 }
 
-function clampFinalJeopardyWager(bet, score) {
-	var n = parseInt(bet, 10);
-	if (isNaN(n) || n < 0) {
-		n = 0;
+function safeTokenEqual(expected, actual) {
+	var a = Buffer.from(String(expected || ''));
+	var b = Buffer.from(String(actual || ''));
+	return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function touchRoom(room) {
+	if (room) {
+		room.lastActivityAt = Date.now();
 	}
-	var max = getMaxFinalJeopardyWager(score);
-	if (n > max) {
-		n = max;
-	}
-	return n;
 }
 
 function clearFinalJeopardyWagerTimer(room) {
@@ -137,6 +137,54 @@ function defaultMissingFinalJeopardyWagers(room) {
 	maybeEmitAllFinalJeopardyWagersReady(room, true);
 }
 
+function scoreMissingFinalJeopardyAnswer(room, playerName) {
+	var fb = room.finalJeopardyBet[playerName];
+	var player = room.players[playerName];
+	if (!fb || !player || fb.scored || room.finalJeopardyAnswerSubmitted[playerName]) {
+		return false;
+	}
+	fb.scored = true;
+	var bet = parseInt(fb.bet, 10);
+	if (isNaN(bet)) {
+		bet = 0;
+	}
+	player.score -= bet;
+	var result = {
+		playerName: playerName,
+		score: player.score,
+		correct: false,
+		answer: '',
+		buzzedInFJ: false,
+	};
+	room.finalJeopardyResults[playerName] = result;
+	emitGame(room.code, 'score update final jeopardy buzzed out', result);
+	emitPlayers(room.code, 'score update', {
+		score: player.score,
+		playerName: playerName,
+		correct: false,
+		finalJeopardy: true,
+	});
+	return true;
+}
+
+function finishFinalJeopardyAnswerPhase(room) {
+	if (!room || (!room.finalJeopardyAnswerPhase && room.phase !== 'final-answer')) {
+		return;
+	}
+	if (room.finalJeopardyAnswerTimer) {
+		clearTimeout(room.finalJeopardyAnswerTimer);
+		room.finalJeopardyAnswerTimer = null;
+	}
+	room.finalJeopardyAnswerEndsAt = 0;
+	room.finalJeopardyAnswerPhase = false;
+	room.phase = 'final-scoring';
+	for (var playerName in room.players) {
+		scoreMissingFinalJeopardyAnswer(room, playerName);
+	}
+	emitPlayers(room.code, 'final jeopardy time out');
+	emitGame(room.code, 'final jeopardy scoring ready');
+}
+
 const app = express();
 const http = require('http').Server(app);
 const io = require('socket.io')(http);
@@ -147,7 +195,23 @@ app.get('/favicon.ico', function (req, res) {
 	res.sendFile(path.join(__dirname, 'favicon.svg'));
 });
 
-app.use(express.static(__dirname + '/'));
+app.use('/css', express.static(path.join(__dirname, 'css'), { dotfiles: 'deny' }));
+app.use(
+	'/javascript',
+	express.static(path.join(__dirname, 'javascript'), { dotfiles: 'deny' })
+);
+app.use(
+	'/game-media',
+	express.static(path.join(__dirname, 'game-media'), { dotfiles: 'deny' })
+);
+app.use(
+	'/temp-media',
+	express.static(path.join(__dirname, 'temp-media'), { dotfiles: 'deny' })
+);
+app.get('/favicon.svg', function (req, res) {
+	res.type('image/svg+xml');
+	res.sendFile(path.join(__dirname, 'favicon.svg'));
+});
 
 app.get('/', function (req, res) {
 	res.type('html').send(`<!DOCTYPE html>
@@ -196,11 +260,24 @@ app.get('/game/:roomCode', function (req, res) {
 	res.sendFile(__dirname + '/html/index.html');
 });
 
-app.get('/api/rooms/new', function (req, res) {
+var roomCreationWindows = new Map();
+app.post('/api/rooms/new', function (req, res) {
+	var ip = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
+	var now = Date.now();
+	var recent = (roomCreationWindows.get(ip) || []).filter(function (time) {
+		return now - time < 60000;
+	});
+	if (recent.length >= 10) {
+		return res.status(429).json({ error: 'Too many rooms created. Try again shortly.' });
+	}
+	recent.push(now);
+	roomCreationWindows.set(ip, recent);
 	var code = generateUniqueRoomCode(gameRooms);
 	var mode = normalizeGameMode(req.query.mode);
-	gameRooms.set(code, createGameRoom(code, mode));
-	res.json({ roomCode: code, mode: mode });
+	var hostToken = createHostToken();
+	gameRooms.set(code, createGameRoom(code, mode, hostToken));
+	res.set('Cache-Control', 'no-store');
+	res.json({ roomCode: code, mode: mode, hostToken: hostToken });
 });
 
 app.get('/player', function (req, res) {
@@ -225,6 +302,21 @@ function emitGame(code, event, data) {
 }
 function emitPlayers(code, event, data) {
 	playerSpc.to(ioRoomName(code)).emit(event, data);
+}
+function publicBaseUrlForSocket(socket) {
+	if (config.publicBaseUrl) {
+		return String(config.publicBaseUrl).replace(/\/+$/, '');
+	}
+	var headers = (socket && socket.handshake && socket.handshake.headers) || {};
+	var host = String(headers['x-forwarded-host'] || headers.host || '').split(',')[0].trim();
+	var proto = String(headers['x-forwarded-proto'] || '').split(',')[0].trim();
+	if (!proto) {
+		proto = socket && socket.handshake && socket.handshake.secure ? 'https' : 'http';
+	}
+	if (!host) {
+		host = 'localhost:' + config.port;
+	}
+	return proto + '://' + host;
 }
 function buildTeamSelectionState(room) {
 	if (!room || room.mode !== 'team') {
@@ -263,6 +355,14 @@ function generateUniqueTeamName(room) {
 	}
 	return 'TEAM ' + (objectLength(room.players) + 1);
 }
+function normalizeDisplayName(value) {
+	return String(value || '')
+		.replace(/[\u0000-\u001f\u007f]/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim()
+		.toUpperCase()
+		.slice(0, 24);
+}
 function emitTeamSelectionUpdate(room) {
 	if (room && room.mode === 'team') {
 		emitPlayers(room.code, 'team selection update', buildTeamSelectionState(room));
@@ -282,7 +382,7 @@ function isRoomReadyForSetup(room) {
 		.every(function (name) {
 			return (
 				Object.keys(room.contestantMembers[name] || {}).length >=
-				room.modeConfig.maxMembersPerContestant
+				1
 			);
 		});
 }
@@ -290,7 +390,17 @@ function getRoomFromSocket(socket) {
 	if (!socket || !socket.roomCode) {
 		return null;
 	}
-	return gameRooms.get(socket.roomCode) || null;
+	var room = gameRooms.get(socket.roomCode) || null;
+	if (
+		room &&
+		socket.nsp &&
+		socket.nsp.name === '/game' &&
+		room.hostSocketId !== socket.id
+	) {
+		return null;
+	}
+	touchRoom(room);
+	return room;
 }
 
 function clearCategoryAutoPickTimer(room) {
@@ -300,6 +410,43 @@ function clearCategoryAutoPickTimer(room) {
 	clearTimeout(room.categoryAutoPickTimer);
 	room.categoryAutoPickTimer = null;
 }
+
+function clearAllRoomTimers(room) {
+	if (!room) {
+		return;
+	}
+	clearCategoryAutoPickTimer(room);
+	clearFinalJeopardyWagerTimer(room);
+	clearOptionsVoteTimer(room);
+	var timerNames = [
+		'questionTimer',
+		'buzzedInTimer',
+		'dailyDoubleTimer',
+		'roundTimerObject',
+		'finalJeopardyAnswerTimer',
+	];
+	for (var i = 0; i < timerNames.length; i++) {
+		if (room[timerNames[i]]) {
+			clearInterval(room[timerNames[i]]);
+			room[timerNames[i]] = null;
+		}
+	}
+	room.finalJeopardyAnswerEndsAt = 0;
+}
+
+function disposeRoom(room) {
+	clearAllRoomTimers(room);
+}
+
+setInterval(function () {
+	var cutoff = Date.now() - ROOM_IDLE_TTL_MS;
+	gameRooms.forEach(function (room, code) {
+		if (room.lastActivityAt < cutoff) {
+			disposeRoom(room);
+			gameRooms.delete(code);
+		}
+	});
+}, 10 * 60 * 1000).unref();
 
 function clueIdMatchesRound(id, isSecondRound) {
 	if (id === 'FJ_0_0') {
@@ -365,6 +512,9 @@ function applyQuestionSelection(room, questionId) {
 	if (!room.questions[questionId]) {
 		return;
 	}
+	if (!room.categorySelectOpen || !clueIdMatchesRound(questionId, room.isSecondRound)) {
+		return;
+	}
 	if (room.clueInProgress) {
 		return;
 	}
@@ -381,6 +531,8 @@ function applyQuestionSelection(room, questionId) {
 	room.categorySelectOpen = false;
 	room.clueInProgress = true;
 	room.playerBuzzerUnlocked = false;
+	room.answerEvaluationInProgress = false;
+	room.phase = 'clue-reading';
 	room.buzzedInPlayerName = undefined;
 	room.buzzedInMemberName = undefined;
 	room.buzzedInClientId = undefined;
@@ -503,10 +655,20 @@ function buildHostSnapshot(room) {
 		finalJeopardyCheck: room.finalJeopardyCheck,
 		finalJeopardyWageringPhase: room.finalJeopardyWageringPhase,
 		finalJeopardyAnswerPhase: room.finalJeopardyAnswerPhase,
+		finalJeopardyAnswerEndsAt: room.finalJeopardyAnswerEndsAt,
+		finalJeopardyBets: collectFinalJeopardyBetsPayload(room),
+		finalJeopardyResults: Object.keys(room.finalJeopardyResults || {}).map(function (name) {
+			return room.finalJeopardyResults[name];
+		}),
 		activePlayerName: ap == null ? '' : ap,
 		clueInProgress: !!room.clueInProgress,
+		phase: room.phase,
 		buzzedInPlayerName: room.buzzedInPlayerName || '',
+		buzzedInMemberName: room.buzzedInMemberName || '',
 		curQuestionId: room.curQuestionId == null ? '' : room.curQuestionId,
+		questionTimerCount: room.questionTimerCount,
+		buzzedInTimerCount: room.buzzedInTimerCount,
+		playerBuzzerUnlocked: room.playerBuzzerUnlocked,
 		playedQuestionIds: Array.from(room.playedClueIds),
 		questions: questionsPlain,
 		players: playersList,
@@ -598,7 +760,7 @@ playerSelect.on('connection', function(socket){
 		console.log('ROOM CODE SENT ' + _roomCode);
 		if (_roomCode && gameRooms.has(_roomCode)){
 			socket.emit('room code validated', true);
-			var base = config.publicBaseUrl || ('http://localhost:' + config.port);
+			var base = publicBaseUrlForSocket(socket);
 			socket.emit('send to room', base + '/player?room=' + encodeURIComponent(_roomCode));
 		}
 		else{
@@ -620,13 +782,28 @@ gameSpc.on('connection', function (socket) {
 		socket.disconnect(true);
 		return;
 	}
+	var requestedRoom = gameRooms.get(code);
+	if (!safeTokenEqual(requestedRoom.hostToken, q.hostToken)) {
+		socket.emit('host room error', {
+			message: 'This browser does not have the host key for that room.',
+		});
+		socket.disconnect(true);
+		return;
+	}
 	socket.roomCode = code;
 	socket.join(ioRoomName(code));
-	var room = gameRooms.get(code);
+	var room = requestedRoom;
+	room.hostSocketId = socket.id;
+	touchRoom(room);
 
 	socket.emit('host room code', { code: room.code });
 	try {
 		socket.emit('host state snapshot', buildHostSnapshot(room));
+		if (!room.gameState.active && Object.keys(room.questions).length) {
+			Object.keys(room.questions).forEach(function (questionId) {
+				emitQuestionDataToSocket(socket, room.questions[questionId]);
+			});
+		}
 	} catch (err) {
 		console.error('buildHostSnapshot failed', err);
 		socket.emit('host state snapshot', { gameActive: false });
@@ -683,17 +860,17 @@ gameSpc.on('connection', function (socket) {
 
 	socket.on('host request new game', function () {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || r.phase === 'resetting' || r.phase === 'loading') {
 			return;
 		}
 		console.log('host request new game');
-		clearCategoryAutoPickTimer(r);
+		clearAllRoomTimers(r);
 		r.pendingHostForcedNewGame = true;
 		r.newGameCounter = 0;
 		r.finalJeopardyWageringPhase = false;
 		r.finalJeopardyAnswerPhase = false;
 		r.finalJeopardyAllWagersEmitted = false;
-		clearFinalJeopardyWagerTimer(r);
+		r.phase = 'resetting';
 		emitPlayers(r.code, 'new game');
 		emitGame(r.code, 'new game', r.gameData);
 	});
@@ -718,12 +895,20 @@ gameSpc.on('connection', function (socket) {
 
 	socket.on('open response final jeopardy', function () {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !r.finalJeopardyWageringPhase || !r.questions.FJ_0_0) {
 			return;
 		}
 		clearFinalJeopardyWagerTimer(r);
 		r.finalJeopardyAnswerPhase = true;
 		r.finalJeopardyWageringPhase = false;
+		r.phase = 'final-answer';
+		r.finalJeopardyAnswerEndsAt = Date.now() + FINAL_JEOPARDY_ANSWER_TIMEOUT_MS;
+		if (r.finalJeopardyAnswerTimer) {
+			clearTimeout(r.finalJeopardyAnswerTimer);
+		}
+		r.finalJeopardyAnswerTimer = setTimeout(function () {
+			finishFinalJeopardyAnswerPhase(r);
+		}, FINAL_JEOPARDY_ANSWER_TIMEOUT_MS);
 		emitPlayers(r.code, 'open response final jeopardy', r.questions['FJ_0_0']._question);
 	});
 
@@ -732,7 +917,7 @@ gameSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
-		clearCategoryAutoPickTimer(r);
+		clearAllRoomTimers(r);
 		r.lastPlayerBoardMarkup = typeof content === 'string' ? content : r.lastPlayerBoardMarkup;
 		r.categorySelectOpen = false;
 		r.clueInProgress = false;
@@ -754,9 +939,12 @@ gameSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
+		playerNameActive = getPlayerActive(r);
+		if (!playerNameActive || !r.players[playerNameActive]) {
+			return;
+		}
 		console.log('Showing Category Select');
 		r.categorySelectOpen = true;
-		setPlayerActive(r, r.players[playerNameActive]);
 		emitPlayers(r.code, 'open question category', playerNameActive);
 		scheduleCategoryAutoPick(r);
 	});
@@ -773,11 +961,15 @@ gameSpc.on('connection', function (socket) {
 
 	socket.on('disconnect', function () {
 		console.log('A user disconnected');
+		var disconnectedRoom = gameRooms.get(socket.roomCode);
+		if (disconnectedRoom && disconnectedRoom.hostSocketId === socket.id) {
+			disconnectedRoom.hostSocketId = null;
+		}
 	});
 
 	socket.on('question timer out', function () {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !r.clueInProgress || r.questionTimerCount > 0) {
 			return;
 		}
 		questionTimesUp(r);
@@ -812,20 +1004,22 @@ gameSpc.on('connection', function (socket) {
 
 	socket.on('final jeopardy started', function () {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !r.finalJeopardyCheck || !r.questions.FJ_0_0) {
 			return;
 		}
+		r.phase = 'final-intro';
 		emitPlayers(r.code, 'final jeopardy started');
 	});
 
 	socket.on('final jeopardy bid', function () {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !r.finalJeopardyCheck || !r.questions.FJ_0_0) {
 			return;
 		}
 		r.finalJeopardyWageringPhase = true;
 		r.finalJeopardyAnswerPhase = false;
 		r.finalJeopardyAllWagersEmitted = false;
+		r.phase = 'final-wager';
 		clearFinalJeopardyWagerTimer(r);
 		r.finalJeopardyWagerTimer = setTimeout(function () {
 			defaultMissingFinalJeopardyWagers(r);
@@ -835,17 +1029,40 @@ gameSpc.on('connection', function (socket) {
 
 	socket.on('final jeopardy time out', function () {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (
+			!r ||
+			(r.finalJeopardyAnswerEndsAt &&
+				Date.now() + 100 < r.finalJeopardyAnswerEndsAt)
+		) {
 			return;
 		}
-		emitPlayers(r.code, 'final jeopardy time out');
+		finishFinalJeopardyAnswerPhase(r);
+	});
+
+	socket.on('final jeopardy reveal player', function (data) {
+		var r = getRoomFromSocket(socket);
+		var playerName = data && String(data.playerName || '');
+		var result = r && r.finalJeopardyResults[playerName];
+		if (!result) {
+			return;
+		}
+		emitPlayers(r.code, 'final jeopardy reveal player', {
+			playerName: playerName,
+			correct: !!result.correct,
+			score: result.score,
+			answer: result.answer || '',
+			bet: r.finalJeopardyBet[playerName]
+				? r.finalJeopardyBet[playerName].bet
+				: 0,
+		});
 	});
 
 	socket.on('game over', function (winningPlayerData) {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || r.phase === 'game-over') {
 			return;
 		}
+		r.phase = 'game-over';
 		var winnerNames = [];
 		var winningScore = 0;
 		if (winningPlayerData && Array.isArray(winningPlayerData.winningPlayerNames)) {
@@ -885,32 +1102,19 @@ gameSpc.on('connection', function (socket) {
 		// pass in the contents of a csv file
 		var parsedHighScore = Baby.parse(gameHighScoreSend);
 	// voila
-		var rowsHighScore = parsedHighScore.data;
-
-		var highScoreArray = new Array();
-
-		for(var row in rowsHighScore){
-			var score=rowsHighScore[row][1];
-			var name=rowsHighScore[row][0];
-			if (row==0){
-				highScoreArray.push({name: name, score: score});
-				
-			}else{
-				if(score<highScoreArray[0].score){
-					highScoreArray.unshift({name: name, score:score});
-				}else{			
-					var indexCounter = highScoreArray.length - 1;	
-					while(score<highScoreArray[indexCounter].score){
-						indexCounter--;
-					}
-					highScoreArray.splice( indexCounter, 0, {name:name, score:score});
-				}
-			}
-		}
-		
-		highScoreArray.reverse();
-
-		return highScoreArray;
+		return parsedHighScore.data
+			.map(function (row) {
+				return {
+					name: String((row && row[0]) || '').trim(),
+					score: parseInt(row && row[1], 10),
+				};
+			})
+			.filter(function (entry) {
+				return entry.name && Number.isFinite(entry.score);
+			})
+			.sort(function (a, b) {
+				return b.score - a.score;
+			});
     }
 
 	console.log('Master Screen Connected');
@@ -928,10 +1132,11 @@ gameSpc.on('connection', function (socket) {
 
 	socket.on('start countdown', function (questionId) {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (!r || !r.clueInProgress || questionId !== r.curQuestionId) {
 			return;
 		}
 		r.curQuestionId = questionId;
+		r.phase = 'countdown';
 		questionBeginCountdown(r);
 		emitGame(r.code, 'countdown', { timerCount: r.questionTimerCount, questionId: questionId });
 		emitPlayers(r.code, 'expose question');
@@ -1032,7 +1237,7 @@ gameSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
-		clearCategoryAutoPickTimer(r);
+		clearAllRoomTimers(r);
 		emitGame(r.code, 'host game load status', {
 			phase: 'loading',
 			message: 'Loading a new episode…',
@@ -1058,16 +1263,19 @@ gameSpc.on('connection', function (socket) {
 			r.finalJeopardyCheck = false;
 			r.finalJeopardyWageringPhase = false;
 			r.finalJeopardyAnswerPhase = false;
+			r.finalJeopardyAnswerEndsAt = 0;
 			r.finalJeopardyAllWagersEmitted = false;
-			clearFinalJeopardyWagerTimer(r);
 			r.finalJeopardyBet = {};
 			r.finalJeopardyAnswerSubmitted = {};
+			r.finalJeopardyResults = {};
 			r.isSecondRound = false;
 			r.roundTimer = ROUND_TIME;
 			r.lastPlayerBoardMarkup = '';
 			r.categorySelectOpen = false;
 			r.clueInProgress = false;
 			r.playerBuzzerUnlocked = false;
+			r.answerEvaluationInProgress = false;
+			r.phase = 'loading';
 			for (var player in r.players) {
 				r.players[player].score = 0;
 				r.players[player].givenAnswer = false;
@@ -1077,13 +1285,26 @@ gameSpc.on('connection', function (socket) {
 			r.airdate = returnValue.airdate;
 			var tempDateNg = new Date(r.airdate);
 			r.airdate = formatPlayerOptionDate(tempDateNg);
-			appendPlayedGameIdToDisk(r.gameId);
 			console.log('NEW GAME BOARD GAME_ID: ' + r.gameId + ' AIRDATE ' + r.airdate);
-			emitGame(r.code, 'host game load status', {
-				phase: 'done',
-				message: '',
+			setGameDataNew(r, function (loadErr) {
+				if (loadErr) {
+					console.error('new game board load failed', loadErr);
+					r.phase = 'load-error';
+					emitGame(r.code, 'host game load status', {
+						phase: 'error',
+						message: 'The selected episode could not build a complete board.',
+					});
+					emitPlayers(r.code, 'game setup failed', {
+						message: 'The new board could not be loaded. Ask the host to try again.',
+					});
+					return;
+				}
+				appendPlayedGameIdToDisk(r.gameId);
+				emitGame(r.code, 'host game load status', {
+					phase: 'done',
+					message: '',
+				});
 			});
-			setGameDataNew(r);
 		});
 	});
 
@@ -1116,6 +1337,7 @@ playerSpc.on('connection', function (socket) {
 	socket.roomCode = code;
 	socket.join(ioRoomName(code));
 	var room = gameRooms.get(code);
+	touchRoom(room);
 
 	console.log('player connected.');
 	socket.suggestedTeamName = room.mode === 'team' ? generateUniqueTeamName(room) : '';
@@ -1133,13 +1355,13 @@ playerSpc.on('connection', function (socket) {
 	socket.on('login name', function (login) {
 		var legacyName = typeof login === 'string' ? login : '';
 		login = login && typeof login === 'object' ? login : {};
-		var memberName = String(login.memberName || legacyName || '').trim().toUpperCase().slice(0, 24);
+		var memberName = normalizeDisplayName(login.memberName || legacyName);
 		var createTeam = room.mode === 'team' && login.createTeam === true;
 		var contestantName =
 			room.mode === 'team'
 				? createTeam
 					? socket.suggestedTeamName
-					: String(login.teamName || '').trim().toUpperCase().slice(0, 24)
+					: normalizeDisplayName(login.teamName)
 				: memberName;
 		var clientId = String(login.clientId || socket.id).trim().slice(0, 80);
 		if (!memberName || !contestantName || !clientId) {
@@ -1305,7 +1527,7 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('option select new', function (optionArray) {
 		var r = getRoomFromSocket(socket);
-		if (!r || r.hostGameOptionsSelected) {
+		if (!r || !r.setupVotingOpen || r.hostGameOptionsSelected) {
 			return;
 		}
 		if (!socket.username) {
@@ -1341,7 +1563,9 @@ playerSpc.on('connection', function (socket) {
 		if (!r) {
 			return;
 		}
-		emitPlayers(r.code, 'new game');
+		emitGame(r.code, 'player new game requested', {
+			playerName: socket.contestantName || '',
+		});
 	});
 
 	socket.on('new game ready', function () {
@@ -1361,7 +1585,12 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('question selected', function (questionId) {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (
+			!r ||
+			!r.categorySelectOpen ||
+			socket.contestantName !== getPlayerActive(r) ||
+			!clueIdMatchesRound(String(questionId || ''), r.isSecondRound)
+		) {
 			return;
 		}
 		applyQuestionSelection(r, questionId);
@@ -1374,31 +1603,45 @@ playerSpc.on('connection', function (socket) {
 		}
 		playerName = socket.contestantName;
 		console.log('BUZZER PRESSED BY: ' + playerName);
+		if (
+			!r.clueInProgress ||
+			!r.playerBuzzerUnlocked ||
+			r.questionTimerCount <= 0 ||
+			r.finalJeopardyCheck ||
+			!r.questions[r.curQuestionId] ||
+			r.questions[r.curQuestionId]._dailyDouble
+		) {
+			return;
+		}
 		if (!r.buzzerFlipped && r.players[playerName].givenAnswer !== true) {
 			console.log('buzzer pressed inside buzzerflip check: ' + playerName);
 			r.buzzerFlipped = true;
 			r.playerBuzzerUnlocked = false;
 			stopTimer(r.questionTimer);
-			if (r.questionTimerCount > 0) {
-				r.buzzedInPlayerName = playerName;
-				r.buzzedInMemberName = socket.memberName || playerName;
-				r.buzzedInClientId = socket.clientId || socket.id;
-				emitGame(r.code, 'buzzer pressed', {
-					playerName: playerName,
-					memberName: r.buzzedInMemberName,
-					clientId: r.buzzedInClientId,
-					questionId: r.curQuestionId,
-				});
-				r.players[playerName].givenAnswer = true;
-				r.buzzedInTimerCount = r.answerTime;
-				buzzedInBeginCountdown(r);
-			}
+			r.buzzedInPlayerName = playerName;
+			r.buzzedInMemberName = socket.memberName || playerName;
+			r.buzzedInClientId = socket.clientId || socket.id;
+			r.phase = 'answering';
+			emitGame(r.code, 'buzzer pressed', {
+				playerName: playerName,
+				memberName: r.buzzedInMemberName,
+				clientId: r.buzzedInClientId,
+				questionId: r.curQuestionId,
+			});
+			r.players[playerName].givenAnswer = true;
+			r.buzzedInTimerCount = Number(r.answerTime);
+			buzzedInBeginCountdown(r);
 		}
 	});
 
 	socket.on('buzzers opened', function () {
 		var r = getRoomFromSocket(socket);
-		if (!r) {
+		if (
+			!r ||
+			!r.clueInProgress ||
+			!r.playerBuzzerUnlocked ||
+			r.questionTimerCount <= 0
+		) {
 			return;
 		}
 		console.log('buzzers opened');
@@ -1419,42 +1662,41 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('player no answer final jeopardy', function (playerName) {
 		var r = getRoomFromSocket(socket);
-		if (!r || !socket.contestantName) {
+		if (
+			!r ||
+			!socket.contestantName ||
+			!r.finalJeopardyAnswerPhase ||
+			(r.finalJeopardyAnswerEndsAt &&
+				Date.now() + 100 < r.finalJeopardyAnswerEndsAt) ||
+			r.finalJeopardyAnswerSubmitted[socket.contestantName]
+		) {
 			return;
 		}
 		playerName = socket.contestantName;
-		var fb = r.finalJeopardyBet[playerName];
-		if (!fb || fb.scored) {
-			return;
-		}
-		fb.scored = true;
-		var bet = parseInt(fb.bet, 10);
-		if (isNaN(bet)) {
-			bet = 0;
-		}
-		r.players[playerName].score -= bet;
-		emitGame(r.code, 'score update final jeopardy buzzed out', {
-			playerName: playerName,
-			score: r.players[playerName].score,
-			correct: false,
-			answer: '',
-			buzzedInFJ: false,
-		});
-		emitPlayers(r.code, 'score update', {
-			score: r.players[playerName].score,
-			playerName: playerName,
-			correct: false,
-			finalJeopardy: true,
-		});
+		scoreMissingFinalJeopardyAnswer(r, playerName);
 	});
 
 	socket.on('answer selection', function (answer) {
 		var r = getRoomFromSocket(socket);
-		if (!r || !answer || !socket.contestantName) {
+		if (
+			!r ||
+			!answer ||
+			typeof answer !== 'object' ||
+			!socket.contestantName ||
+			!isValidAnswer(answer.answer)
+		) {
 			return;
 		}
 		answer.playerName = socket.contestantName;
 		if (answer.finalJeopardyCheck) {
+			if (
+				!r.finalJeopardyCheck ||
+				!r.finalJeopardyAnswerPhase ||
+				!r.questions.FJ_0_0 ||
+				!r.finalJeopardyBet[answer.playerName]
+			) {
+				return;
+			}
 			if (r.finalJeopardyAnswerSubmitted[answer.playerName]) {
 				return;
 			}
@@ -1464,19 +1706,36 @@ playerSpc.on('connection', function (socket) {
 				clientId: socket.clientId,
 			});
 		}
+		if (answer.finalJeopardyCheck) {
+			checkAnswerAsync(r, answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
+			return;
+		}
+		var currentQuestion = r.questions[r.curQuestionId];
 		if (
-			!answer.finalJeopardyCheck &&
-			r.questions[answer.questionId] &&
-			!r.questions[answer.questionId]._dailyDouble &&
-			r.buzzedInClientId &&
-			socket.clientId !== r.buzzedInClientId
+			!r.clueInProgress ||
+			!currentQuestion ||
+			answer.questionId !== r.curQuestionId ||
+			r.answerEvaluationInProgress
 		) {
 			return;
 		}
+		if (currentQuestion._dailyDouble) {
+			if (
+				socket.contestantName !== getPlayerActive(r) ||
+				socket.clientId !== r.dailyDoubleResponderClientId ||
+				r.dailyDoubleTimerCount <= 0
+			) {
+				return;
+			}
+		} else if (
+			socket.clientId !== r.buzzedInClientId ||
+			r.buzzedInTimerCount <= 0
+		) {
+			return;
+		}
+		r.answerEvaluationInProgress = true;
 		r.buzzerFlipped = false;
-		if (answer.finalJeopardyCheck) {
-			checkAnswerAsync(r, answer.answer, answer.questionId, answer.playerName, answer.finalJeopardyCheck);
-		} else if (r.buzzedInTimerCount > 0) {
+		if (currentQuestion._dailyDouble || r.buzzedInTimerCount > 0) {
 			stopTimer(r.buzzedInTimer);
 			stopTimer(r.dailyDoubleTimer);
 			r.buzzedInTimer = null;
@@ -1487,19 +1746,39 @@ playerSpc.on('connection', function (socket) {
 
 	socket.on('bet selection', function (bet) {
 		var r = getRoomFromSocket(socket);
-		if (!r || !bet || !socket.contestantName) {
+		if (!r || !bet || typeof bet !== 'object' || !socket.contestantName) {
 			return;
 		}
 		bet.playerName = socket.contestantName;
 		if (!bet.finalJeopardyCheck) {
+			var ddQuestion = r.questions[r.curQuestionId];
 			if (
-				r.dailyDoubleResponderClientId &&
-				r.dailyDoubleResponderClientId !== socket.clientId
+				!r.clueInProgress ||
+				!ddQuestion ||
+				!ddQuestion._dailyDouble ||
+				bet.questionId !== r.curQuestionId ||
+				bet.playerName !== getPlayerActive(r)
 			) {
 				return;
 			}
+			if (
+				r.dailyDoubleResponderClientId ||
+				r.phase === 'daily-double-answer'
+			) {
+				return;
+			}
+			var ddValidation = validateDailyDoubleWager(
+				bet.betValue,
+				r.players[bet.playerName].score,
+				r.curQuestionId
+			);
+			if (!ddValidation.valid) {
+				socket.emit('wager rejected', { message: ddValidation.message });
+				return;
+			}
 			r.dailyDoubleResponderClientId = socket.clientId;
-			r.questions[bet.questionId]._value = bet.betValue;
+			ddQuestion._value = ddValidation.wager;
+			r.phase = 'daily-double-answer';
 			emitPlayers(r.code, 'daily double response', {
 				playerName: bet.playerName,
 				memberName: socket.memberName || bet.playerName,
@@ -1511,7 +1790,7 @@ playerSpc.on('connection', function (socket) {
 			emitGame(r.code, 'question reveal dd', {
 				question: r.questions[bet.questionId]._question,
 				questionId: bet.questionId,
-				bet: bet.betValue,
+				bet: ddValidation.wager,
 				playerName: bet.playerName,
 				memberName: socket.memberName || bet.playerName,
 			});
@@ -1528,30 +1807,26 @@ playerSpc.on('connection', function (socket) {
 			if (!player) {
 				return;
 			}
-			var clampedBet = clampFinalJeopardyWager(bet.betValue, player.score);
+			var finalValidation = validateFinalJeopardyWager(bet.betValue, player.score);
+			if (!finalValidation.valid) {
+				socket.emit('wager rejected', { message: finalValidation.message });
+				return;
+			}
 			r.finalJeopardyBet[bet.playerName] = {
 				playerName: bet.playerName,
-				bet: clampedBet,
+				bet: finalValidation.wager,
 			};
 			emitPlayers(r.code, 'final jeopardy contestant wager locked', {
 				playerName: bet.playerName,
 				clientId: socket.clientId,
-				bet: clampedBet,
+				bet: finalValidation.wager,
 			});
 			emitGame(r.code, 'final jeopardy response', {
 				playerName: bet.playerName,
-				bet: clampedBet,
+				bet: finalValidation.wager,
 			});
 			maybeEmitAllFinalJeopardyWagersReady(r);
 		}
-	});
-
-	socket.on('final jeopardy reveal player', function (data) {
-		var r = getRoomFromSocket(socket);
-		if (!r || !data) {
-			return;
-		}
-		emitPlayers(r.code, 'final jeopardy reveal player', data);
 	});
 
 	socket.on('player field fj time out', function (playerName) {
@@ -1630,6 +1905,9 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 		},
 	})
 		.then(function (result) {
+			if (!finalJeopardy) {
+				room.answerEvaluationInProgress = false;
+			}
 			correct = result.correct;
 			if (result.source === 'openai') {
 				console.log(
@@ -1698,13 +1976,15 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 					allPlayersAnswered: checkIfAllPlayersAnswered(room),
 				});
 			} else {
-				emitGame(room.code, 'score update final jeopardy', {
+				var finalResult = {
 					score: score,
 					answer: originalPlayerAnswer,
 					playerName: playerName,
 					correct: correct,
 					buzzedInFJ: true,
-				});
+				};
+				room.finalJeopardyResults[playerName] = finalResult;
+				emitGame(room.code, 'score update final jeopardy', finalResult);
 				emitPlayers(room.code, 'score update', {
 					score: score,
 					playerName: playerName,
@@ -1714,8 +1994,40 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 			}
 		})
 		.catch(function (err) {
+			if (!finalJeopardy) {
+				room.answerEvaluationInProgress = false;
+			}
 			console.error('evaluateAnswer failed', err);
 			emitGame(room.code, 'answer ai judging end');
+			if (!finalJeopardy) {
+				var failedQuestion = room.questions[questionId];
+				var failedPlayer = room.players[playerName];
+				if (failedQuestion && failedPlayer) {
+					var failedValue = parseInt(failedQuestion._value, 10) || 0;
+					failedPlayer.score -= failedValue;
+					emitGame(room.code, 'score update', {
+						score: failedPlayer.score,
+						answer: originalPlayerAnswer,
+						playerName: playerName,
+						actualAnswer: originalActualAnswer,
+						dailyDouble: failedQuestion._dailyDouble,
+						dailyDoubleBet: failedQuestion._value,
+						questionId: questionId,
+						correct: false,
+						allPlayersAnswered: checkIfAllPlayersAnswered(room),
+					});
+					emitPlayers(room.code, 'score update', {
+						score: failedPlayer.score,
+						playerName: playerName,
+						questionId: questionId,
+						correct: false,
+						dailyDouble: failedQuestion._dailyDouble,
+						dailyDoubleBet: failedQuestion._value,
+						allPlayersAnswered: checkIfAllPlayersAnswered(room),
+					});
+				}
+				return;
+			}
 			if (finalJeopardy) {
 				var fb = room.finalJeopardyBet[playerName];
 				if (fb && !fb.scored) {
@@ -1725,13 +2037,15 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 						bet = 0;
 					}
 					room.players[playerName].score -= bet;
-					emitGame(room.code, 'score update final jeopardy', {
+					var failedFinalResult = {
 						score: room.players[playerName].score,
 						answer: originalPlayerAnswer,
 						playerName: playerName,
 						correct: false,
 						buzzedInFJ: true,
-					});
+					};
+					room.finalJeopardyResults[playerName] = failedFinalResult;
+					emitGame(room.code, 'score update final jeopardy', failedFinalResult);
 					emitPlayers(room.code, 'score update', {
 						score: room.players[playerName].score,
 						playerName: playerName,
@@ -1744,129 +2058,93 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 }
 
 
-function setGameDataNew(room) {
-		var last_clue_id = 0;
-		var first_clue_id;
-		var question_object_ids = {};
-		var gid = room.gameId;
-		var queryQuestions =
-			'SELECT clues.id, clues.game, round, value, category, clue, answer, media \n' +
-			'FROM clues\n' +
-			'JOIN documents ON clues.id = documents.id\n' +
-			'JOIN classifications ON clues.id = classifications.clue_id\n' +
-			'JOIN categories ON classifications.category_id = categories.id\n' +
-			"WHERE clues.game = '" +
-			gid +
-			"'";
+function setGameDataNew(room, callback) {
+	callback = typeof callback === 'function' ? callback : function () {};
+	var queryQuestions =
+		'SELECT clues.id, clues.game, round, value, category, clue, answer, media\n' +
+		'FROM clues\n' +
+		'JOIN documents ON clues.id = documents.id\n' +
+		'JOIN classifications ON clues.id = classifications.clue_id\n' +
+		'JOIN categories ON classifications.category_id = categories.id\n' +
+		'WHERE clues.game = ?\n' +
+		'ORDER BY clues.id ASC';
+	var round1Values = [200, 400, 600, 800, 1000];
+	var round2Values = [400, 800, 1200, 1600, 2000];
+	var firstRoundDD = Math.floor(Math.random() * 30);
+	var secondRoundDDA = Math.floor(Math.random() * 30);
+	var secondRoundDDB;
+	do {
+		secondRoundDDB = Math.floor(Math.random() * 30);
+	} while (secondRoundDDB === secondRoundDDA);
 
-		var queryQuestionsOrder =
-			'SELECT id\n' + 'FROM clues\n' + "WHERE game = '" + gid + "'\n" + 'ORDER BY id DESC';
-
-	
-		var round_1_values = [
-			200,
-			400,
-			600,
-			800,
-			1000
-		];
-
-		var round_2_values = [
-					400,
-					800,
-					1200,
-					1600,
-					2000
-		];
-		
-		//check if this question is a Daily Double!
-		
-		var firstRoundDD = Math.floor((Math.random() * 30));
-
-		var secondRoundDD_A = Math.floor((Math.random() * 30));
-
-		var secondRoundDD_B = (function(otherNum){
-			var randomNum = Math.floor((Math.random() * 30));
-			while(randomNum == otherNum){
-				randomNum = Math.floor((Math.random() * 30));
-			}
-			return randomNum;
-		})(secondRoundDD_A);
-
-		db.serialize(function() {
-			db.all(queryQuestionsOrder, function(err, rows){
-				if(err){
-					console.log(err);
-				}else{
-					//calculate question id's for appropriate format
-					last_clue_id = rows[0].id; 
-					first_clue_id = last_clue_id - 60;
-					for (var index = first_clue_id; index<last_clue_id; index++ ){
-						question_object_ids[index] = index - first_clue_id; 
-					}
-
-					var questionRow = 0;
-
-					for (var index=0; index<=60; index++){
-						var question_num = 0;
-						var dailyDouble = false;
-						if (index < 30){
-							if (index == firstRoundDD){
-								dailyDouble = true;
-							}
-							question_object_ids[index+first_clue_id] = {question_id: "J_" + index%6 + "_" + questionRow, value: round_1_values[questionRow], dailyDouble: dailyDouble};
-						}
-						else if(index < 60){
-							if (index - 30 == secondRoundDD_A || index - 30 == secondRoundDD_B)
-							{
-								dailyDouble = true;
-							}
-							question_object_ids[index+first_clue_id] = {question_id: "DJ_" + index%6 + "_" + questionRow, value: round_2_values[questionRow], dailyDouble: dailyDouble};
-						}
-						else{
-							question_object_ids[index+first_clue_id] = {question_id: "FJ_0_0", value: 0, dailyDouble: false};
-						}
-						if((index+1)%6 == 0){
-							questionRow++;
-						}
-						if((index+1) == 30){
-							questionRow = 0;
-						}
-					}
-					console.log("game clue ids: " +  JSON.stringify(question_object_ids));
-					console.log("Last Clue Id: " + last_clue_id);
+	db.all(queryQuestions, [room.gameId], function (err, rows) {
+		if (err) {
+			return callback(err);
+		}
+		if (!rows || rows.length !== 61) {
+			return callback(
+				new Error(
+					'Expected 61 joined clue rows for game ' +
+						room.gameId +
+						', received ' +
+						(rows ? rows.length : 0)
+				)
+			);
+		}
+		var nextQuestions = {};
+		try {
+			for (var index = 0; index < rows.length; index++) {
+				var row = rows[index];
+				var questionId;
+				var value;
+				var dailyDouble = false;
+				if (index < 30) {
+					var jRow = Math.floor(index / 6);
+					questionId = 'J_' + (index % 6) + '_' + jRow;
+					value = round1Values[jRow];
+					dailyDouble = index === firstRoundDD;
+				} else if (index < 60) {
+					var djIndex = index - 30;
+					var djRow = Math.floor(djIndex / 6);
+					questionId = 'DJ_' + (djIndex % 6) + '_' + djRow;
+					value = round2Values[djRow];
+					dailyDouble = djIndex === secondRoundDDA || djIndex === secondRoundDDB;
+				} else {
+					questionId = 'FJ_0_0';
+					value = 0;
 				}
+				var answer = parseAnswer(row.answer);
+				if (!String(row.category || '').trim() || !String(row.clue || '').trim() || !answer) {
+					throw new Error('Unplayable clue row ' + row.id + ' in game ' + room.gameId);
+				}
+				var tempQuestion = new Question(
+					String(row.category),
+					value,
+					String(row.clue),
+					answer,
+					dailyDouble,
+					questionId,
+					String(row.media || '').trim(),
+					row.round
+				);
+				tempQuestion.mediaType = parseMediaType(tempQuestion.mediaLink);
+				nextQuestions[questionId] = tempQuestion;
+			}
+		} catch (buildErr) {
+			return callback(buildErr);
+		}
+		if (Object.keys(nextQuestions).length !== 61) {
+			return callback(new Error('Question mapping did not produce 61 unique clue IDs.'));
+		}
+		downloadImages(room, nextQuestions, function () {
+			room.questions = nextQuestions;
+			Object.keys(room.questions).forEach(function (questionId) {
+				emitQuestionData(room, room.questions[questionId]);
 			});
-
-	  		db.all(queryQuestions, function (err, rows) {
-	    		if(err){
-			        console.log(err);
-			    }else{
-			        for (var row in rows){
-			        	//console.log("THIS ROW RAW DATA : " + rows[row]);
-			        	var this_clue_id = rows[row].id;
-			        	var this_question_id = question_object_ids[this_clue_id].question_id;
-			        	var this_clue_media = rows[row].media;
-			        	this_clue_media = this_clue_media.trim();
-			        	//create question, set relevant fields
-			        	var tempQuestion = new Question(rows[row].category, question_object_ids[this_clue_id].value, rows[row].clue, rows[row].answer, question_object_ids[this_clue_id].dailyDouble, question_object_ids[this_clue_id].question_id, this_clue_media, rows[row].round);
-			        	console.log("parsing " + JSON.stringify(tempQuestion));
-			        	var mediaType = parseMediaType(tempQuestion.mediaLink);
-						var answerStrip = parseAnswer(tempQuestion.answer);
-						tempQuestion.answer = answerStrip;
-						tempQuestion.mediaType = mediaType;
-			        	room.questions[this_question_id] = tempQuestion;
-
-			        	if (tempQuestion.dailyDouble == true){
-			        		console.log("\n THIS QUESTION IS A DAILY DOUBLE: " + tempQuestion.questionId + "\n");
-			        	}
-			        }
-
-			        downloadImages(room);
-			       console.log('THIS GAMES QUESTIONS: ' + JSON.stringify(room.questions));
-			    }
-			  });
-  		});
+			room.phase = 'ready';
+			callback(null, room.questions);
+		});
+	});
 }
 
 var commonsImageSearchCache = new Map();
@@ -1964,13 +2242,32 @@ function emitQuestionData(room, question) {
 	});
 }
 
-function downloadImages(room) {
-	for (var question in room.questions) {
-		var q = room.questions[question];
+function emitQuestionDataToSocket(socket, question) {
+	socket.emit('game data', {
+		questionID: question.questionId,
+		question: question,
+	});
+}
+
+function downloadImages(room, questions, callback) {
+	callback = typeof callback === 'function' ? callback : function () {};
+	var remaining = Object.keys(questions).length;
+	if (!remaining) {
+		callback();
+		return;
+	}
+	function finish(question) {
+		remaining--;
+		if (remaining === 0) {
+			callback();
+		}
+	}
+	for (var question in questions) {
+		var q = questions[question];
 		var mediaLink = String(q.mediaLink || '').trim();
 		console.log('MEDIA LINK on question loop: /' + mediaLink + '/');
 		if (!mediaLink) {
-			emitQuestionData(room, q);
+			finish(q);
 			continue;
 		}
 
@@ -1989,11 +2286,11 @@ function downloadImages(room) {
 			if (mediaType === 'image') {
 				(function (_question, r) {
 					tryCommonsImageFallback(_question, function () {
-						emitQuestionData(r, _question);
+						finish(_question);
 					});
 				})(q, room);
 			} else {
-				emitQuestionData(room, q);
+				finish(q);
 			}
 			continue;
 		}
@@ -2013,7 +2310,7 @@ function downloadImages(room) {
 		if (alreadyHave) {
 			console.log("doesn't need download: " + filePath);
 			q.mediaLink = filePath;
-			emitQuestionData(room, q);
+			finish(q);
 			continue;
 		}
 
@@ -2029,16 +2326,16 @@ function downloadImages(room) {
 					_question._mediaOriginalUrl = _originalUrl;
 					if (ok) {
 						_question.mediaLink = _filePath;
-						emitQuestionData(r, _question);
+						finish(_question);
 					} else {
 						_question.mediaLink = _originalUrl;
 						if (_mediaType === 'image') {
 							tryCommonsImageFallback(_question, function () {
-								emitQuestionData(r, _question);
+								finish(_question);
 							});
 							return;
 						}
-						emitQuestionData(r, _question);
+						finish(_question);
 					}
 				},
 				_mediaType
@@ -2048,8 +2345,18 @@ function downloadImages(room) {
 }
 
 function openTheBuzzer(room) {
+	if (
+		!room ||
+		!room.clueInProgress ||
+		room.questionTimerCount <= 0 ||
+		!room.questions[room.curQuestionId] ||
+		room.questions[room.curQuestionId]._dailyDouble
+	) {
+		return;
+	}
 	console.log('should be continuing countdown');
 	room.playerBuzzerUnlocked = true;
+	room.phase = 'buzzing';
 	emitPlayers(room.code, 'open buzzer');
 }
 
@@ -2057,6 +2364,9 @@ function returnToBoardPickerState(room) {
 	clearCategoryAutoPickTimer(room);
 	room.clueInProgress = false;
 	room.categorySelectOpen = false;
+	room.playerBuzzerUnlocked = false;
+	room.answerEvaluationInProgress = false;
+	room.phase = 'between-clues';
 }
 
 function sendPlayerReconnectState(socket, name, room) {
@@ -2128,7 +2438,7 @@ function objectLength( object ) {
 };
 
 function changeActivePlayerNewRound(room) {
-	var lowestScore = 999999;
+	var lowestScore = Infinity;
 	var playerLow;
 
 	for (var player in room.players) {
@@ -2138,7 +2448,9 @@ function changeActivePlayerNewRound(room) {
 		}
 	}
 	console.log('LOWEST SCORING PLAYER: ' + playerLow);
-	setPlayerActive(room, room.players[playerLow._name]);
+	if (playerLow) {
+		setPlayerActive(room, playerLow);
+	}
 }
 
 function questionBeginCountdown(room) {
@@ -2163,6 +2475,11 @@ function questionContinueCountdown(room) {
 }
 
 function questionTimesUp(room) {
+	if (!room || !room.clueInProgress) {
+		return;
+	}
+	stopTimer(room.questionTimer);
+	room.questionTimer = null;
 	emitPlayers(room.code, 'question disappear', room.curQuestionId);
 	returnToBoardPickerState(room);
 	emitPlayers(room.code, 'active player', {
@@ -2178,6 +2495,9 @@ function questionTimesUp(room) {
 
 function setPlayerActive(room, playerActive) {
 	console.log('PLAYER ACTIVE ' + playerActive);
+	if (!room || !playerActive) {
+		return;
+	}
 	playerActive.isActive = true;
 
 	for (var player in room.players) {
@@ -2335,6 +2655,7 @@ function finalizeGameOptionsVotes(room, reason) {
 	room.episodeFilter =
 		tallyMajorityOrNull(room.optionVotes, 'episodeFilter') || 'any';
 	room.hostGameOptionsSelected = true;
+	room.phase = 'loading';
 	var received = objectLength(room.optionVotes);
 	room.optionVotes = {};
 	var loadMsg =
@@ -2375,15 +2696,30 @@ function finalizeGameOptionsVotes(room, reason) {
 		room.airdate = returnValue.airdate;
 		var tempDate = new Date(room.airdate);
 		room.airdate = formatPlayerOptionDate(tempDate);
-		appendPlayedGameIdToDisk(room.gameId);
 		console.log('GAME_ID: ' + room.gameId + ' AIRDATE ' + room.airdate);
-		emitGame(room.code, 'host game load status', {
-			phase: 'done',
-			message: '',
+		setGameDataNew(room, function (loadErr) {
+			if (loadErr) {
+				console.error('setGameDataNew failed', loadErr);
+				room.hostGameOptionsSelected = false;
+				room.phase = 'load-error';
+				emitPlayers(room.code, 'game setup failed', {
+					message: 'That episode could not build a complete board. Change votes and try again.',
+				});
+				emitGame(room.code, 'host game load status', {
+					phase: 'error',
+					message: 'Episode data was incomplete or invalid.',
+				});
+				startOptionsVoteTimer(room);
+				return;
+			}
+			appendPlayedGameIdToDisk(room.gameId);
+			emitGame(room.code, 'host game load status', {
+				phase: 'done',
+				message: '',
+			});
+			emitPlayers(room.code, 'answer time data', room.answerTime);
+			emitGame(room.code, 'answer time data', room.answerTime);
 		});
-		emitPlayers(room.code, 'answer time data', room.answerTime);
-		emitGame(room.code, 'answer time data', room.answerTime);
-		setGameDataNew(room);
 	});
 }
 
@@ -2457,18 +2793,13 @@ function selectGameForRoom(room, callback) {
 			function (err, ret) {
 				if (err) {
 					console.warn(
-						'Dynamic j-archive pack episode failed, using local DB:',
+						'Dynamic j-archive pack episode failed:',
 						err && err.message ? err.message : err
 					);
 				}
 				if (!ret) {
-					hostMsg('No pack match for that filter; searching local library…');
-					selectByDecadeWithFallbacks(
-						room.decade,
-						playedGameIds,
-						callback,
-						hostMsg
-					);
+					hostMsg('No episode matches that decade and episode type.');
+					callback(null);
 					return;
 				}
 				hostMsg('Episode found. Building board…');
@@ -2608,8 +2939,19 @@ function selectByAirYearPrefixList(prefixList, playedGameIds, callback, hostMsg)
 			selectRandomFullGameRow(null, notInClause, function (row) {
 				if (row) {
 					console.log('Fallback any-decade game: ' + row.game);
+					callback(row);
+					return;
 				}
-				callback(row || null);
+				if (notInClause) {
+					if (hostMsg) {
+						hostMsg('All available episodes were played; allowing a replay…');
+					}
+					selectRandomFullGameRow(null, '', function (replayRow) {
+						callback(replayRow || null);
+					});
+					return;
+				}
+				callback(null);
 			});
 			return;
 		}
@@ -2674,6 +3016,16 @@ function buzzedInBeginCountdown(room) {
 }
 
 function buzzedInTimesUp(room) {
+	if (
+		!room ||
+		!room.clueInProgress ||
+		!room.buzzedInPlayerName ||
+		!room.players[room.buzzedInPlayerName] ||
+		!room.questions[room.curQuestionId] ||
+		room.answerEvaluationInProgress
+	) {
+		return;
+	}
 	room.buzzerFlipped = false;
 	var value = room.questions[room.curQuestionId]._value;
 	room.players[room.buzzedInPlayerName].score -= value;
@@ -2718,6 +3070,9 @@ function dailyDoubleBeginCountdown(room) {
 }
 
 function dailyDoubleTimesUp(room) {
+	if (!room || !room.clueInProgress || !room.questions[room.curQuestionId]) {
+		return;
+	}
 	room.buzzerFlipped = false;
 	var value = room.questions[room.curQuestionId]._value;
 	var activeName = getPlayerActive(room);
@@ -2770,5 +3125,5 @@ function setRoundTimer(room) {
 }
 
 http.listen(config.port, function () {
-	console.log('listening on *:' + config.port);
+	console.log('listening on *:' + http.address().port);
 });

@@ -14,9 +14,10 @@ To install you must have node and npm.
 
 5) Enjoy!
 
-This is very much a work in progress.  There is no error handling for disconnects to properly reload player states if someone exits their
-window mid-game.  I have attempted to cover all bases where Google Speech API fails.  It is now deprecated and for whatever reason
-sometimes it will fail, the game should recover, just give it a few seconds.
+Rooms are intentionally tied to one running Node process. Player and host browser
+reconnects are restored while that process remains online, but restarting or
+redeploying the server expires every room. Use a stable single instance during a
+game and create a new room after a restart.
 
-
-NOTE:  In order to have support for speech-to-text in game, you must use Google Chrome.  Also, sorry Apple users, iOS does not support this particular feature at all.
+Speech-to-text is optional and browser-dependent. When it is unavailable, players
+can always type answers using the same answer field.

@@ -13,7 +13,7 @@ $(document).ready(function() {
 		console.log("PROMISES DON'T WORK :(");
 	}
 
-	var roundTimer = 600;
+	var roundTimer = 480;
 	var playerName = null;
 	var memberName = null;
 	var gameMode = 'standard';
@@ -526,8 +526,9 @@ $(document).ready(function() {
 			roundTimer = rt;
 		}
 		var at = state['answer-time'];
-		if (typeof at === 'number') {
-			answerTime = at;
+		var parsedAnswerTime = parseInt(at, 10);
+		if (!isNaN(parsedAnswerTime) && parsedAnswerTime > 0) {
+			answerTime = parsedAnswerTime;
 		}
 		$('#login_container').css('display', 'none');
 		$('.player_field').css('display', 'block');
@@ -1741,16 +1742,17 @@ $(document).ready(function() {
 		}
 	});
 
-	 function getMaxWager(score)
+	 function getMaxWager(score, isFinalJeopardy)
 	 {
 	 	score = parseInt(score, 10);
 	 	if (isNaN(score)) {
 	 		score = 0;
 	 	}
-	 	if (score >= 1000) {
-	 		return score;
-	 	}
-	 	return 1000;
+		if (isFinalJeopardy) {
+			return Math.max(0, score);
+		}
+		var boardMaximum = String(curQuestionId || '').indexOf('DJ_') === 0 ? 2000 : 1000;
+		return Math.max(boardMaximum, score);
 	 }
 
 	 function validateBet(bet, isFinalJeopardy)
@@ -1769,22 +1771,25 @@ $(document).ready(function() {
 	 	{
 	 		return {message: "The minimum bet is " + minBet + ".", isValid: false};
 	 	}
-	 	var maxBet = getMaxWager(playerScore);
+		var maxBet = getMaxWager(playerScore, isFinalJeopardy);
 	 	if (bet > maxBet)
 	 	{
-	 		if (playerScore >= 1000) {
-	 			return {
-	 				message: "You can only wager up to your score ($" + maxBet + ").",
-	 				isValid: false
-	 			};
-	 		}
-	 		return {
-	 			message: "You can wager up to $1000.",
-	 			isValid: false
-	 		};
+			return {
+				message: "You can only wager up to $" + maxBet + ".",
+				isValid: false
+			};
 	 	}
 	 	return {message: "Valid", isValid: true};
 	 }
+
+	 socket.on('wager rejected', function (payload) {
+		$('.player_bet_field').css('display', 'block');
+		SimpleModal.alert({
+			title: 'Invalid wager',
+			text: (payload && payload.message) || 'That wager is not allowed.',
+			type: 'error',
+		});
+	 });
 
 	function escapeHtml(value) {
 		return String(value == null ? '' : value)
@@ -1965,6 +1970,17 @@ $(document).ready(function() {
 			socket.emit('login name', loginPayload(memberName, playerName));
 		}
 	});
+	if (socket.io && typeof socket.io.on === 'function') {
+		socket.io.on('reconnect', function () {
+			setPlayerConnectionState('online', 'Connected');
+			if (playerName && memberName) {
+				socket.emit('login name', loginPayload(memberName, playerName));
+			}
+		});
+		socket.io.on('reconnect_attempt', function () {
+			setPlayerConnectionState('connecting', 'Reconnecting…');
+		});
+	}
 
 	socket.on('connect', function () {
 		setPlayerConnectionState('online', 'Connected');

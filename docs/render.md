@@ -32,6 +32,9 @@ This project is a single Node.js process: Express serves static files and HTML r
    | `OPENAI_MODEL` | No | Defaults to `gpt-4o-mini` if unset. |
    | `OPENAI_ANSWER_JUDGE_ENABLED` | No | `true` / `false`; default in code is effectively on when a key is present—see `.env.example`. |
    | `CLUES_DB_PATH` | No | Only if the database file is not at `./data/clues.db` relative to the app root (e.g. on a mounted disk). |
+   | `GAME_HISTORY_PATH` | No | Writable path for played-game history; point this at a persistent disk to retain replay history. |
+   | `GAME_HIGH_SCORE_PATH` | No | Writable path for high scores; point this at a persistent disk to retain results. |
+   | `LAST_NAME_FILE_PATH` | No | Override for the local answer-judging last-name dictionary. |
 
    You can copy names and descriptions from `.env.example` for anything else you use locally.
 
@@ -46,7 +49,7 @@ This project is a single Node.js process: Express serves static files and HTML r
 
 ## Data that changes on disk
 
-Files such as `data/games_played.csv` and `data/game_high_score.csv` may be updated while the app runs. On a standard Web Service, the filesystem is **ephemeral**: redeploys replace the image, and you can lose those files unless you use a **persistent disk** and point the app at paths on that disk (e.g. set `CLUES_DB_PATH` and adjust any future config for CSV paths if you move them). The clues database is read for gameplay; if you never write to it in production, keeping a single committed `data/clues.db` is enough for many setups.
+Files such as `data/games_played.csv` and `data/game_high_score.csv` may be updated while the app runs. On a standard Web Service, the filesystem is **ephemeral**: redeploys replace the image. Use a persistent disk and set `GAME_HISTORY_PATH` and `GAME_HIGH_SCORE_PATH` to retain those files. Set `CLUES_DB_PATH` to the disk as well if dynamic episode-pack imports are enabled.
 
 ## Custom domain
 

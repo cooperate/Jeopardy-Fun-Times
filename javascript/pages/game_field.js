@@ -126,7 +126,7 @@ $(document).ready(function() {
 	var categories = new Array();
 	var animated = false;
 	var lockPlayers = false;
-	var roundTimer = 600;
+	var roundTimer = 480;
 	var hostRoundIsDoubleJeopardy = false;
 	var finalJeopardyThemeEnded = false;
 	var finalJeopardyAnswerPeriodStarted = false;
@@ -460,6 +460,7 @@ $(document).ready(function() {
 		window.location.replace('/game');
 		return;
 	}
+	var hostToken = sessionStorage.getItem('jeopardy.hostToken.' + hostRoomCode) || '';
 
 	//set css for various game elements
 	$('#question_field').css('display', 'none');
@@ -471,7 +472,9 @@ $(document).ready(function() {
 	$('.player_name_bubble').hide();
 
 
-	var socket = io('/game', { query: { room: hostRoomCode } });
+	var socket = io('/game', {
+		query: { room: hostRoomCode, hostToken: hostToken },
+	});
 
 	socket.on('host room error', function (payload) {
 		var msg = payload && payload.message ? payload.message : 'This room is not available.';
@@ -914,6 +917,11 @@ $(document).ready(function() {
 			}, 0);
 			var requiredMembers =
 				minimum * (parseInt(hostModeConfig.maxMembersPerContestant, 10) || 2);
+			var teamsReady =
+				players.length >= minimum &&
+				players.every(function (player) {
+					return player.members && player.members.length >= 1;
+				});
 			$('#host_join_count').text(
 				players.length +
 					' of ' +
@@ -927,7 +935,9 @@ $(document).ready(function() {
 					' online · ' +
 					(memberCount >= requiredMembers
 						? 'teams full'
-						: requiredMembers - memberCount + ' spots needed')
+						: teamsReady
+							? 'ready to start · optional teammate spots open'
+							: minimum - players.length + ' more teams needed')
 			);
 			return;
 		}
@@ -991,12 +1001,12 @@ $(document).ready(function() {
 			.removeClass('host-mode-standard host-mode-team host-mode-open')
 			.addClass('host-mode-' + gameMode);
 		var count = snapshot.players ? snapshot.players.length : latestHostPlayers.length;
-		var canStartOpen =
-			gameMode === 'open' &&
+		var canStartManual =
+			(gameMode === 'open' || gameMode === 'team') &&
 			!snapshot.gameActive &&
 			!snapshot.setupVotingOpen &&
 			count >= (config.minContestants || 3);
-		$('#host_start_setup_btn').prop('hidden', !canStartOpen);
+		$('#host_start_setup_btn').prop('hidden', !canStartManual);
 	}
 
 	function applyHostSnapshot(snapshot) {
@@ -1067,7 +1077,56 @@ $(document).ready(function() {
 			moveActiveIndicator(snapshot.activePlayerName);
 		}
 
+		if (snapshot.clueInProgress && snapshot.curQuestionId && questionList[snapshot.curQuestionId]) {
+			questionIsLive = true;
+			curQuestionId = snapshot.curQuestionId;
+			displayQuestion(questionList[curQuestionId].question, curQuestionId);
+			if (snapshot.buzzedInPlayerName) {
+				drawTypingPopup(
+					snapshot.buzzedInPlayerName,
+					snapshot.buzzedInMemberName || snapshot.buzzedInPlayerName
+				);
+			} else if (snapshot.phase === 'clue-reading') {
+				/* The previous host disappeared before it started the server timer. */
+				socket.emit('start countdown', curQuestionId);
+			}
+		}
+
 		if (snapshot.finalJeopardyCheck) {
+			mergeFinalJeopardyBets(snapshot.finalJeopardyBets || []);
+			(snapshot.finalJeopardyResults || []).forEach(function (result) {
+				applyFJScore(result);
+			});
+			if (snapshot.finalJeopardyWageringPhase) {
+				var wagerCount = snapshot.finalJeopardyBets
+					? snapshot.finalJeopardyBets.length
+					: 0;
+				if (wagerCount >= snapshot.players.length) {
+					openFinalJeopardyAnswersOnce();
+				}
+			} else if (
+				(snapshot.finalJeopardyAnswerPhase ||
+					snapshot.phase === 'final-scoring' ||
+					snapshot.phase === 'game-over') &&
+				questionList['FJ_0_0']
+			) {
+				finalJeopardyAnswersOpened = true;
+				displayQuestion(questionList['FJ_0_0'].question, 'FJ_0_0');
+				postScreenMessage(
+					questionList['FJ_0_0'].category +
+						'</br></br>' +
+						questionList['FJ_0_0'].question,
+					false
+				);
+				if (snapshot.phase === 'final-scoring' || snapshot.phase === 'game-over') {
+					finalJeopardyThemeEnded = true;
+					waitForFinalScoresThenCeremonies();
+				} else {
+					beginFinalJeopardyAnswerPeriod(
+						Math.max(0, snapshot.finalJeopardyAnswerEndsAt - Date.now())
+					);
+				}
+			}
 			var fjMsg =
 				'Final Jeopardy — host view restored. Player phones should show the wager or clue again after they refresh or reconnect.';
 			if (snapshot.finalJeopardyAnswerPhase) {
@@ -1080,7 +1139,9 @@ $(document).ready(function() {
 			}
 			fjMsg +=
 				' If the room is stuck, use <b>New game</b> (button under the room code) to reset everyone.';
-			postScreenMessage(fjMsg, false, 0);
+			if (!snapshot.finalJeopardyAnswerPhase) {
+				postScreenMessage(fjMsg, false, 0);
+			}
 		}
 
 		updateHostJoinedPlayersPanel(snapshot.players || []);
@@ -1507,7 +1568,7 @@ $(document).ready(function() {
 
 	var playerFJCounter = 0;
 
-	function beginFinalJeopardyAnswerPeriod() {
+	function beginFinalJeopardyAnswerPeriod(durationOverrideMs) {
 		if (finalJeopardyAnswerPeriodStarted) {
 			return;
 		}
@@ -1515,14 +1576,10 @@ $(document).ready(function() {
 
 		playSound(finalJeopardyTheme);
 
-		var durationMs = FINAL_JEOPARDY_THEME_MS;
-		if (
-			finalJeopardyTheme.duration &&
-			isFinite(finalJeopardyTheme.duration) &&
-			finalJeopardyTheme.duration > 0
-		) {
-			durationMs = Math.ceil(finalJeopardyTheme.duration * 1000) + 250;
-		}
+		var durationMs =
+			typeof durationOverrideMs === 'number' && isFinite(durationOverrideMs)
+				? Math.max(0, durationOverrideMs)
+				: FINAL_JEOPARDY_THEME_MS;
 
 		clearTimeout(finalJeopardyAnswerPeriodTimer);
 		finalJeopardyAnswerPeriodTimer = setTimeout(function () {
@@ -1643,6 +1700,10 @@ $(document).ready(function() {
 
 	socket.on('final jeopardy wagers sync', function(payload){
 		mergeFinalJeopardyBets(payload && payload.bets);
+	});
+
+	socket.on('final jeopardy scoring ready', function(){
+		onFinalJeopardyTimeUp();
 	});
 
 	socket.on('final jeopardy all wagers ready', function(payload){
@@ -1962,20 +2023,21 @@ $(document).ready(function() {
 		});
 	}
 
-    socket.on('high scores', function(highScores){
-    	console.log("HIGH SCORES : " + JSON.stringify(highScores));
-    	var scoreCounter = 0;
-    	$("#message_overlay").html("");
-    	var highScoreTag = "<div><h2>HIGH SCORES</h2><ol>"
-    	for (var playerVal in highScores) {
-    		if(scoreCounter<10){
-    			highScoreTag += "<li>" + highScores[playerVal].name + " " + highScores[playerVal].score +  "</li>";
-    			scoreCounter++;
-    		}
-    	}
-    	highScoreTag += "</ol></div>";
-    	$("#message_overlay").append(highScoreTag);
-    });
+	socket.on('high scores', function(highScores){
+		console.log("HIGH SCORES : " + JSON.stringify(highScores));
+		var $wrap = $('<div>');
+		var $list = $('<ol>');
+		$wrap.append($('<h2>', { text: 'HIGH SCORES' }));
+		for (var scoreCounter = 0; scoreCounter < Math.min(10, highScores.length); scoreCounter++) {
+			$list.append(
+				$('<li>', {
+					text: String(highScores[scoreCounter].name || '') + ' ' + String(highScores[scoreCounter].score || 0),
+				})
+			);
+		}
+		$wrap.append($list);
+		$("#message_overlay").empty().append($wrap);
+	});
 
     socket.on('new game', function(){
     	skipGameDataAfterHostRestore = false;
@@ -2013,7 +2075,7 @@ $(document).ready(function() {
 		questionIsLive = false;
 		finalJeopardyCheck = false;
 		dailyDoubleBet = 0;
-		roundTimer = 600;
+		roundTimer = 480;
 		hostRoundIsDoubleJeopardy = false;
 		setHostBoardChromeActive(false);
 		animated = false;
@@ -2522,8 +2584,17 @@ $(document).ready(function() {
 				return;
 			}
 			$video.remove();
-			if (fallbackUrl || primaryUrl) {
-				showQuestionImage(fallbackUrl || primaryUrl, '');
+			var source = safeHttpUrl(fallbackUrl) || safeHttpUrl(primaryUrl);
+			if (source) {
+				$container.append(
+					$('<a>', {
+						href: source,
+						target: '_blank',
+						rel: 'noopener noreferrer',
+						text: 'Open clue media in a compatible player',
+						class: 'question-media-fallback-link',
+					})
+				);
 			}
 		});
 		$video.attr('src', primaryUrl);
@@ -2861,6 +2932,13 @@ $(document).ready(function() {
 			return;
 		}
 		socket.emit('host request new game');
+	});
+
+	socket.on('player new game requested', function (data) {
+		var requester = data && data.playerName ? data.playerName : 'A player';
+		if (window.confirm(requester + ' requested another game. Start a fresh board now?')) {
+			socket.emit('host request new game');
+		}
 	});
 
 	$('#host_start_setup_btn').on('click', function () {

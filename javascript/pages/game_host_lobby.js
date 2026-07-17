@@ -9,13 +9,18 @@ $(document).ready(function () {
 	$('.host-mode-card').on('click', function () {
 		var mode = String($(this).data('mode') || 'standard');
 		$('.host-mode-card').prop('disabled', true);
-		fetch('/api/rooms/new?mode=' + encodeURIComponent(mode))
+		fetch('/api/rooms/new?mode=' + encodeURIComponent(mode), {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+		})
 			.then(function (res) {
 				return res.json();
 			})
 			.then(function (data) {
 				var code = data && data.roomCode;
-				if (code) {
+				var hostToken = data && data.hostToken;
+				if (code && hostToken) {
+					sessionStorage.setItem('jeopardy.hostToken.' + code, hostToken);
 					window.location.href = '/game/' + encodeURIComponent(code);
 				} else {
 					SimpleModal.alert({
@@ -51,6 +56,15 @@ $(document).ready(function () {
 		}).then(function (value) {
 			var code = normalizeCode(value);
 			if (code) {
+				var token = sessionStorage.getItem('jeopardy.hostToken.' + code);
+				if (!token) {
+					SimpleModal.alert({
+						title: 'Host key not found',
+						text: 'Open this room in the browser that created it.',
+						type: 'error',
+					});
+					return;
+				}
 				window.location.href = '/game/' + encodeURIComponent(code);
 			}
 		});
