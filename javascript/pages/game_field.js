@@ -137,6 +137,8 @@ $(document).ready(function() {
 	var answerTime = 15;
 	var gameMode = 'standard';
 	var hostModeConfig = {};
+	var disputeEnabled = false;
+	var hostAwaitingDispute = false;
 	var latestHostPlayers = [];
 	var hostRosterLocked = false;
 	const SOUNDS_DIR = "../../game-media/sounds/";
@@ -574,6 +576,169 @@ $(document).ready(function() {
 		$('#host_ai_judging_player').text('');
 	}
 
+	function updateHostDisputeToggleUi() {
+		var btn = $('#host_dispute_toggle');
+		if (!btn.length) {
+			return;
+		}
+		btn.attr('aria-pressed', disputeEnabled ? 'true' : 'false');
+		btn.text(disputeEnabled ? 'Dispute: On' : 'Dispute: Off');
+		btn.attr(
+			'title',
+			disputeEnabled
+				? 'Dispute is on — contestants can challenge an incorrect ruling for AI review'
+				: 'Dispute is off — click to let contestants challenge incorrect rulings'
+		);
+	}
+
+	function showHostDisputeReview(playerName, answer) {
+		var wrap = $('#host_dispute_review');
+		if (!wrap.length) {
+			return;
+		}
+		var text =
+			(playerName || 'Contestant') +
+			' answer ' +
+			(answer || '') +
+			' is in dispute, waiting for review team to process...';
+		$('#host_dispute_review_text').text(text);
+		wrap.removeClass('host-dispute-review--hidden').attr('aria-hidden', 'false');
+		setHostGameState('dispute', 'IN DISPUTE', text);
+		postScreenMessage(text, false, 0);
+	}
+
+	function hideHostDisputeReview() {
+		var wrap = $('#host_dispute_review');
+		if (!wrap.length) {
+			return;
+		}
+		wrap.addClass('host-dispute-review--hidden').attr('aria-hidden', 'true');
+	}
+
+	function proceedHostAfterIncorrect(score) {
+		if (!score) {
+			return;
+		}
+		if (score.allPlayersAnswered || score.dailyDouble) {
+			getSoundAndFadeAudio(questionTheme);
+			socket.emit('close buzzer');
+			var msgRsp =
+				'The response we were looking for was ' + score.actualAnswer + '.';
+			if (score.dailyDouble) {
+				playSound(gameSoundWrong);
+				msgRsp =
+					score.playerName +
+					' said ' +
+					score.answer +
+					' and was incorrect.' +
+					' What you were looking for was ' +
+					score.actualAnswer +
+					'.';
+				msgRsp += 'They wagered ' + score.dailyDoubleBet + '.';
+			} else {
+				playSound(gameSoundWrong);
+				msgRsp =
+					score.playerName +
+					' said ' +
+					score.answer +
+					' and was incorrect.' +
+					' What you were looking for was ' +
+					score.actualAnswer +
+					'.';
+			}
+			postScreenMessage(msgRsp, false, 0);
+			var question_read = false;
+			messageToVoice(msgRsp, true, function () {
+				question_read = true;
+				staticMessageOff();
+				if (score.dailyDouble) {
+					socket.emit('finished all messages dd');
+				} else {
+					socket.emit('all messages done score update');
+				}
+			});
+			setTimeout(function () {
+				if (question_read == false) {
+					staticMessageOff();
+					if (score.dailyDouble) {
+						socket.emit('finished all messages dd');
+					} else {
+						socket.emit('all messages done score update');
+					}
+				}
+			}, 12000);
+			removeDailyDoubleIcon();
+			endCountdown(score.questionId);
+			questionIsLive = false;
+			return;
+		}
+
+		var msgFunction = function () {
+			staticMessageOff();
+			playSound(questionTheme);
+			socket.emit('continue countdown', score.questionId);
+			socket.emit('open buzzer');
+		};
+		var reopenMessage = 'Questions still open.';
+		var msgRead = false;
+		messageToVoice(reopenMessage, true, function () {
+			msgFunction();
+			msgRead = true;
+		});
+		setTimeout(function () {
+			if (!msgRead) {
+				msgFunction();
+			}
+		}, 8000);
+		postScreenMessage(
+			score.playerName + ' was incorrect. Questions still open.',
+			false,
+			0
+		);
+	}
+
+	function announceHostCorrectAfterDispute(score) {
+		socket.emit('close buzzer');
+		var msgRsp =
+			score.playerName +
+			' said ' +
+			score.answer +
+			' and was correct!';
+		if (score.dailyDouble) {
+			msgRsp =
+				score.answer +
+				' is correct, congratulations! They wagered ' +
+				score.dailyDoubleBet +
+				'.';
+		}
+		var msgRead = false;
+		messageToVoice(msgRsp, true, function () {
+			msgRead = true;
+			staticMessageOff();
+			if (score.dailyDouble) {
+				socket.emit('finished all messages dd');
+			} else {
+				socket.emit('all messages done score update correct');
+			}
+			hideQuestionField();
+		});
+		endCountdown(score.questionId);
+		postScreenMessage(msgRsp, false, 0);
+		setTimeout(function () {
+			if (msgRead == false) {
+				staticMessageOff();
+				if (score.dailyDouble) {
+					socket.emit('finished all messages dd');
+				} else {
+					socket.emit('all messages done score update correct');
+				}
+				hideQuestionField();
+			}
+		}, 12000);
+		removeDailyDoubleIcon();
+		questionIsLive = false;
+	}
+
 	socket.on('answer ai judging', function (data) {
 		showHostAiJudging(data && data.playerName);
 		setHostGameState(
@@ -585,6 +750,50 @@ $(document).ready(function() {
 
 	socket.on('answer ai judging end', function () {
 		hideHostAiJudging();
+	});
+
+	socket.on('dispute enabled updated', function (data) {
+		disputeEnabled = !!(data && data.enabled);
+		updateHostDisputeToggleUi();
+	});
+
+	socket.on('answer dispute started', function (data) {
+		hostAwaitingDispute = false;
+		flushHostSpeech();
+		hideHostAiJudging();
+		showHostDisputeReview(data && data.playerName, data && data.answer);
+	});
+
+	socket.on('dispute window closed', function (data) {
+		if (!data || !data.proceed) {
+			return;
+		}
+		hostAwaitingDispute = false;
+		hideHostDisputeReview();
+		proceedHostAfterIncorrect(data);
+	});
+
+	socket.on('dispute resolved', function (data) {
+		hostAwaitingDispute = false;
+		hideHostDisputeReview();
+		hideHostAiJudging();
+		if (!data || !data.playerName) {
+			return;
+		}
+		if (nameIds[data.playerName] != null) {
+			$('#name_' + nameIds[data.playerName]).html(data.score);
+			updateHostPodiumRanks();
+		}
+		setHostGameState(
+			data.correct ? 'correct' : 'incorrect',
+			data.correct ? 'CORRECT' : 'INCORRECT',
+			data.playerName + ' · ' + data.score
+		);
+		if (data.correct) {
+			announceHostCorrectAfterDispute(data);
+		} else {
+			proceedHostAfterIncorrect(data);
+		}
 	});
 
 	socket.on('game data', function (data) {
@@ -1007,6 +1216,10 @@ $(document).ready(function() {
 			!snapshot.setupVotingOpen &&
 			count >= (config.minContestants || 3);
 		$('#host_start_setup_btn').prop('hidden', !canStartManual);
+		if (typeof snapshot.disputeEnabled === 'boolean') {
+			disputeEnabled = snapshot.disputeEnabled;
+			updateHostDisputeToggleUi();
+		}
 	}
 
 	function applyHostSnapshot(snapshot) {
@@ -2204,6 +2417,8 @@ $(document).ready(function() {
 	 //on answer determination answer submit
 	 socket.on('score update', function(score){
 	 	hideHostAiJudging();
+	 	hideHostDisputeReview();
+	 	hostAwaitingDispute = false;
 	 	var openQuestionsSwitch = true;
 	 	$('#name_' + nameIds[score.playerName]).html(score.score);
 	 	updateHostPodiumRanks();
@@ -2245,6 +2460,30 @@ $(document).ready(function() {
 			}, 12000);
 
 	 		questionIsLive = false;
+	 	}
+	 	else if (score.disputeAvailable && !score.correct)
+	 	{
+	 		playSound(gameSoundWrong);
+	 		hostAwaitingDispute = true;
+	 		var disputeMessage =
+	 			score.playerName + ' said ' + score.answer + ' and was incorrect.';
+	 		postScreenMessage(disputeMessage, false, 0);
+	 		var disputeWindowEnded = false;
+	 		var disputeSpeechUsable = hostCanSpeak();
+	 		function endDisputeWindow() {
+	 			if (disputeWindowEnded || !hostAwaitingDispute) {
+	 				return;
+	 			}
+	 			disputeWindowEnded = true;
+	 			socket.emit('dispute window expired');
+	 		}
+	 		messageToVoice(disputeMessage, true, function () {
+	 			/* Without TTS the callback fires immediately — keep a timed window. */
+	 			if (disputeSpeechUsable) {
+	 				endDisputeWindow();
+	 			}
+	 		});
+	 		setTimeout(endDisputeWindow, disputeSpeechUsable ? 12000 : 8000);
 	 	}
 	 	else if(score.allPlayersAnswered || score.dailyDouble)
 	 	{
@@ -2945,6 +3184,13 @@ $(document).ready(function() {
 		$(this).prop('disabled', true).text('Starting…');
 		socket.emit('host start setup');
 	});
+
+	$('#host_dispute_toggle').on('click', function () {
+		disputeEnabled = !disputeEnabled;
+		updateHostDisputeToggleUi();
+		socket.emit('set dispute enabled', { enabled: disputeEnabled });
+	});
+	updateHostDisputeToggleUi();
 
     //loop the theme if it ends
     jeopardyIntroMusic.addEventListener('ended', function() {

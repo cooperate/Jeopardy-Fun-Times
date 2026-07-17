@@ -22,6 +22,7 @@
    </div>
    <button type="button" id="host_new_game_btn" class="host-new-game-btn" title="Reset scores and start a fresh game for everyone">New game</button>
    <div id="host_mode_badge" class="host-mode-badge">STANDARD JEOPARDY</div>
+   <button type="button" id="host_dispute_toggle" class="host-dispute-toggle" aria-pressed="false" title="When on, contestants can dispute an incorrect ruling for an AI review">Dispute: Off</button>
    <button type="button" id="host_start_setup_btn" class="host-start-setup-btn" hidden>Start with these players</button>
    <div id="host_player_roster" class="host-player-roster" aria-live="polite" aria-label="Players who have joined this room">
      <span class="host-player-roster__label">Joined</span>
@@ -32,6 +33,11 @@
      <div class="host-ai-judging__inner">
        <span class="host-ai-judging__label">Checking answer with AI…</span>
        <span class="host-ai-judging__player" id="host_ai_judging_player"></span>
+     </div>
+   </div>
+   <div id="host_dispute_review" class="host-dispute-review host-dispute-review--hidden" aria-live="polite" aria-hidden="true" role="status">
+     <div class="host-dispute-review__inner">
+       <span class="host-dispute-review__label" id="host_dispute_review_text">Answer is in dispute, waiting for review team to process…</span>
      </div>
    </div>
    <div id="master_container">

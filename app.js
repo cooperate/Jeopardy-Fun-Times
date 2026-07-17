@@ -674,6 +674,15 @@ function buildHostSnapshot(room) {
 		players: playersList,
 		questionCount: keys.length,
 		boardRound: boardRound,
+		disputeEnabled: !!room.disputeEnabled,
+		pendingDispute: room.pendingDispute
+			? {
+					playerName: room.pendingDispute.playerName,
+					answer: room.pendingDispute.answer,
+					questionId: room.pendingDispute.questionId,
+				}
+			: null,
+		disputeInProgress: !!room.disputeInProgress,
 	};
 }
 
@@ -828,6 +837,45 @@ gameSpc.on('connection', function (socket) {
 			needed: objectLength(r.players),
 		});
 		emitOptionsVoteTimer(r);
+	});
+
+	socket.on('set dispute enabled', function (payload) {
+		var r = getRoomFromSocket(socket);
+		if (!r) {
+			return;
+		}
+		var enabled =
+			payload === true ||
+			(payload && typeof payload === 'object' && payload.enabled === true);
+		r.disputeEnabled = !!enabled;
+		emitGame(r.code, 'dispute enabled updated', { enabled: r.disputeEnabled });
+		emitPlayers(r.code, 'dispute enabled updated', { enabled: r.disputeEnabled });
+	});
+
+	socket.on('dispute window expired', function () {
+		var r = getRoomFromSocket(socket);
+		if (!r || !r.pendingDispute || r.disputeInProgress) {
+			return;
+		}
+		var pending = r.pendingDispute;
+		r.pendingDispute = null;
+		emitPlayers(r.code, 'dispute window closed', {
+			playerName: pending.playerName,
+			questionId: pending.questionId,
+		});
+		emitGame(r.code, 'dispute window closed', {
+			playerName: pending.playerName,
+			answer: pending.answer,
+			actualAnswer: pending.actualAnswer,
+			questionId: pending.questionId,
+			dailyDouble: pending.dailyDouble,
+			dailyDoubleBet: pending.dailyDoubleBet,
+			allPlayersAnswered: pending.allPlayersAnswered,
+			score: r.players[pending.playerName]
+				? r.players[pending.playerName].score
+				: pending.scoreAfterIncorrect,
+			proceed: true,
+		});
 	});
 
 	socket.on('host remove contestant', function (contestantName) {
@@ -1676,6 +1724,23 @@ playerSpc.on('connection', function (socket) {
 		scoreMissingFinalJeopardyAnswer(r, playerName);
 	});
 
+	socket.on('answer dispute', function () {
+		var r = getRoomFromSocket(socket);
+		if (
+			!r ||
+			!r.disputeEnabled ||
+			!r.pendingDispute ||
+			r.disputeInProgress ||
+			!socket.contestantName
+		) {
+			return;
+		}
+		if (socket.contestantName !== r.pendingDispute.playerName) {
+			return;
+		}
+		beginAnswerDisputeReview(r);
+	});
+
 	socket.on('answer selection', function (answer) {
 		var r = getRoomFromSocket(socket);
 		if (
@@ -1878,6 +1943,127 @@ function formatPlayerOptionDate(date) {
 	return monthNames[monthIndex] + ' ' + day + ', ' + year;
 }
 
+function clearDisputeState(room) {
+	if (!room) {
+		return;
+	}
+	room.pendingDispute = null;
+	room.disputeInProgress = false;
+}
+
+function beginAnswerDisputeReview(room) {
+	var pending = room.pendingDispute;
+	if (!pending || room.disputeInProgress) {
+		return;
+	}
+	room.pendingDispute = null;
+	room.disputeInProgress = true;
+
+	var playerName = pending.playerName;
+	var questionId = pending.questionId;
+	var question = room.questions[questionId];
+	var player = room.players[playerName];
+	if (!question || !player) {
+		room.disputeInProgress = false;
+		return;
+	}
+
+	var startedPayload = {
+		playerName: playerName,
+		answer: pending.answer,
+		questionId: questionId,
+	};
+	emitGame(room.code, 'answer dispute started', startedPayload);
+	emitPlayers(room.code, 'answer dispute started', startedPayload);
+
+	evaluateAnswer({
+		playerAnswer: pending.rawAnswer,
+		canonicalAnswer: question._answer,
+		clueText: question._question,
+		lastNameFilePath: lastNameFile,
+		aiEnabled: config.openaiAnswerJudgeEnabled,
+		openaiApiKey: config.openaiApiKey,
+		openaiModel: config.openaiModel,
+		onAiJudgingStart: function () {
+			emitGame(room.code, 'answer ai judging', {
+				playerName: playerName,
+				questionId: questionId,
+				dispute: true,
+			});
+		},
+	})
+		.then(function (result) {
+			room.disputeInProgress = false;
+			emitGame(room.code, 'answer ai judging end');
+			var overturned = !!result.correct;
+			if (result.source === 'openai') {
+				console.log(
+					'Dispute judged by OpenAI: ' +
+						(overturned ? 'overturned (correct)' : 'upheld (incorrect)')
+				);
+			}
+
+			if (overturned) {
+				/* Undo incorrect deduction and award the clue value. */
+				player.score += pending.value * 2;
+				var prevBoard = getPlayerActive(room);
+				room.pendingGainedBoardOnCorrect =
+					!prevBoard || prevBoard !== playerName;
+				setPlayerActive(room, player);
+			}
+
+			var resolvedPayload = {
+				playerName: playerName,
+				answer: pending.answer,
+				actualAnswer: pending.actualAnswer,
+				questionId: questionId,
+				correct: overturned,
+				score: player.score,
+				dailyDouble: pending.dailyDouble,
+				dailyDoubleBet: pending.dailyDoubleBet,
+				allPlayersAnswered: pending.allPlayersAnswered,
+			};
+			emitGame(room.code, 'dispute resolved', resolvedPayload);
+			emitPlayers(room.code, 'dispute resolved', {
+				playerName: playerName,
+				answer: pending.answer,
+				questionId: questionId,
+				correct: overturned,
+				score: player.score,
+				dailyDouble: pending.dailyDouble,
+				dailyDoubleBet: pending.dailyDoubleBet,
+				allPlayersAnswered: pending.allPlayersAnswered,
+			});
+		})
+		.catch(function (err) {
+			console.error('dispute evaluateAnswer failed', err);
+			room.disputeInProgress = false;
+			emitGame(room.code, 'answer ai judging end');
+			var failedPayload = {
+				playerName: playerName,
+				answer: pending.answer,
+				actualAnswer: pending.actualAnswer,
+				questionId: questionId,
+				correct: false,
+				score: player.score,
+				dailyDouble: pending.dailyDouble,
+				dailyDoubleBet: pending.dailyDoubleBet,
+				allPlayersAnswered: pending.allPlayersAnswered,
+			};
+			emitGame(room.code, 'dispute resolved', failedPayload);
+			emitPlayers(room.code, 'dispute resolved', {
+				playerName: playerName,
+				answer: pending.answer,
+				questionId: questionId,
+				correct: false,
+				score: player.score,
+				dailyDouble: pending.dailyDouble,
+				dailyDoubleBet: pending.dailyDoubleBet,
+				allPlayersAnswered: pending.allPlayersAnswered,
+			});
+		});
+}
+
 function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 	if (finalJeopardy) {
 		questionId = 'FJ_0_0';
@@ -1888,13 +2074,16 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 	var score = room.players[playerName].score;
 	var value = parseInt(room.questions[questionId]._value, 10);
 	var correct = false;
+	/* When disputes are on, reserve OpenAI for the dispute path (heuristic first). */
+	var useAiOnFirstPass =
+		!!config.openaiAnswerJudgeEnabled && !room.disputeEnabled;
 
 	evaluateAnswer({
 		playerAnswer: answer,
 		canonicalAnswer: room.questions[questionId]._answer,
 		clueText: room.questions[questionId]._question,
 		lastNameFilePath: lastNameFile,
-		aiEnabled: config.openaiAnswerJudgeEnabled,
+		aiEnabled: useAiOnFirstPass,
 		openaiApiKey: config.openaiApiKey,
 		openaiModel: config.openaiModel,
 		onAiJudgingStart: function () {
@@ -1955,26 +2144,58 @@ function checkAnswerAsync(room, answer, questionId, playerName, finalJeopardy) {
 			room.players[playerName].score = score;
 
 			if (!finalJeopardy) {
+				var allAnswered = checkIfAllPlayersAnswered(room);
+				var dailyDouble = room.questions[questionId]._dailyDouble;
+				var disputeAvailable =
+					!correct &&
+					!!room.disputeEnabled &&
+					!room.disputeInProgress;
+				if (disputeAvailable) {
+					room.pendingDispute = {
+						playerName: playerName,
+						answer: originalPlayerAnswer,
+						rawAnswer: answer,
+						actualAnswer: originalActualAnswer,
+						questionId: questionId,
+						value: value,
+						dailyDouble: dailyDouble,
+						dailyDoubleBet: room.questions[questionId]._value,
+						allPlayersAnswered: allAnswered,
+						scoreAfterIncorrect: room.players[playerName].score,
+					};
+				} else {
+					room.pendingDispute = null;
+				}
 				emitGame(room.code, 'score update', {
 					score: room.players[playerName].score,
 					answer: originalPlayerAnswer,
 					playerName: playerName,
 					actualAnswer: originalActualAnswer,
-					dailyDouble: room.questions[questionId]._dailyDouble,
+					dailyDouble: dailyDouble,
 					dailyDoubleBet: room.questions[questionId]._value,
 					questionId: questionId,
 					correct: correct,
-					allPlayersAnswered: checkIfAllPlayersAnswered(room),
+					allPlayersAnswered: allAnswered,
+					disputeAvailable: disputeAvailable,
 				});
 				emitPlayers(room.code, 'score update', {
 					score: room.players[playerName].score,
 					playerName: playerName,
+					answer: originalPlayerAnswer,
 					questionId: questionId,
 					correct: correct,
-					dailyDouble: room.questions[questionId]._dailyDouble,
+					dailyDouble: dailyDouble,
 					dailyDoubleBet: room.questions[questionId]._value,
-					allPlayersAnswered: checkIfAllPlayersAnswered(room),
+					allPlayersAnswered: allAnswered,
+					disputeAvailable: disputeAvailable,
 				});
+				if (disputeAvailable) {
+					emitPlayers(room.code, 'dispute window open', {
+						playerName: playerName,
+						answer: originalPlayerAnswer,
+						questionId: questionId,
+					});
+				}
 			} else {
 				var finalResult = {
 					score: score,
@@ -2362,6 +2583,7 @@ function openTheBuzzer(room) {
 
 function returnToBoardPickerState(room) {
 	clearCategoryAutoPickTimer(room);
+	clearDisputeState(room);
 	room.clueInProgress = false;
 	room.categorySelectOpen = false;
 	room.playerBuzzerUnlocked = false;

@@ -25,6 +25,36 @@ $(document).ready(function() {
 	var playerScore = 0;
 	var activePlayerName;
 	var curQuestionId = '';
+	var disputeWindowOpen = false;
+
+	function hidePlayerDisputeButton() {
+		disputeWindowOpen = false;
+		$('#dispute_btn').prop('hidden', true).prop('disabled', false);
+	}
+
+	function showPlayerDisputeButton() {
+		disputeWindowOpen = true;
+		$('#dispute_btn').prop('hidden', false).prop('disabled', false);
+	}
+
+	function showPlayerDisputeReview(playerName, answer) {
+		var text =
+			(playerName || 'Contestant') +
+			' answer ' +
+			(answer || '') +
+			' is in dispute, waiting for review team to process...';
+		$('#player_dispute_review_text').text(text);
+		$('#player_dispute_review')
+			.removeClass('player-dispute-review--hidden')
+			.attr('aria-hidden', 'false');
+		postScreenMessage(text, false, 0);
+	}
+
+	function hidePlayerDisputeReview() {
+		$('#player_dispute_review')
+			.addClass('player-dispute-review--hidden')
+			.attr('aria-hidden', 'true');
+	}
 
 	function normalizePlayerRoomCode(s) {
 		return String(s || '')
@@ -1419,6 +1449,8 @@ $(document).ready(function() {
 
 	 //on answer determination 
 	 socket.on('score update', function(score){
+	 	hidePlayerDisputeButton();
+	 	hidePlayerDisputeReview();
 
 	 	if (playerName == score.playerName)
 	 	{
@@ -1431,6 +1463,22 @@ $(document).ready(function() {
 	 	}
 	 	if (!finalJeopardyCheck)
 	 	{
+	 		if (score.disputeAvailable && !score.correct) {
+	 			setPlayerBuzzerState(
+	 				'taken',
+	 				playerName == score.playerName
+	 					? 'INCORRECT — DISPUTE NOW IF YOU WANT REVIEW'
+	 					: 'INCORRECT — DISPUTE WINDOW OPEN',
+	 				'WAIT'
+	 			);
+	 			if (playerName == score.playerName) {
+	 				showPlayerDisputeButton();
+	 				postScreenMessage('Press Dispute to challenge this ruling.', false, 0);
+	 			} else if (!buzzerLock) {
+	 				staticMessageOff();
+	 			}
+	 			return;
+	 		}
 		 	setPlayerBuzzerState(
 		 		score.correct || score.allPlayersAnswered || score.dailyDouble
 		 			? 'waiting'
@@ -1461,6 +1509,66 @@ $(document).ready(function() {
 		 		}
 		 	}
 	 	}
+	 });
+
+	 socket.on('dispute window open', function (data) {
+	 	if (!data || data.playerName !== playerName) {
+	 		return;
+	 	}
+	 	showPlayerDisputeButton();
+	 	setPlayerBuzzerState(
+	 		'taken',
+	 		'INCORRECT — DISPUTE NOW IF YOU WANT REVIEW',
+	 		'WAIT'
+	 	);
+	 });
+
+	 socket.on('dispute window closed', function () {
+	 	hidePlayerDisputeButton();
+	 });
+
+	 socket.on('answer dispute started', function (data) {
+	 	hidePlayerDisputeButton();
+	 	showPlayerDisputeReview(data && data.playerName, data && data.answer);
+	 	setPlayerBuzzerState('waiting', 'ANSWER IN DISPUTE — PLEASE WAIT', 'WAIT');
+	 });
+
+	 socket.on('dispute resolved', function (data) {
+	 	hidePlayerDisputeButton();
+	 	hidePlayerDisputeReview();
+	 	if (!data) {
+	 		return;
+	 	}
+	 	if (playerName == data.playerName) {
+	 		$('#player_score').html(data.score);
+	 		playerScore = data.score;
+	 	}
+	 	setPlayerBuzzerState(
+	 		data.correct || data.allPlayersAnswered || data.dailyDouble
+	 			? 'waiting'
+	 			: 'taken',
+	 		data.correct
+	 			? 'DISPUTE WON — WATCH THE HOST SCREEN'
+	 			: data.allPlayersAnswered || data.dailyDouble
+	 				? 'CLUE COMPLETE'
+	 				: 'DISPUTE DENIED — OTHER PLAYERS MAY BUZZ',
+	 		'WAIT'
+	 	);
+	 	if (data.allPlayersAnswered || data.correct || data.dailyDouble) {
+	 		eliminateQuestion(data.questionId);
+	 	} else if (playerName == data.playerName) {
+	 		postScreenMessage("Dispute denied. You'll get it next time!", false, 0);
+	 	} else if (!buzzerLock) {
+	 		staticMessageOff();
+	 	}
+	 });
+
+	 $('#dispute_btn').on('click', function () {
+	 	if (!disputeWindowOpen) {
+	 		return;
+	 	}
+	 	$(this).prop('disabled', true);
+	 	socket.emit('answer dispute');
 	 });
 
 	 socket.on('final jeopardy reveal player', function(data){

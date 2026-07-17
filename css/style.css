@@ -515,6 +515,7 @@ body.host-many-players .player_type__countdown {
 	background: #e65100;
 }
 .host-game-state[data-state="judging"],
+.host-game-state[data-state="dispute"],
 .host-game-state[data-state="loading"],
 .host-game-state[data-state="voting"] {
 	background: #283593;
@@ -1311,6 +1312,48 @@ body.host-many-players #game_board tr:not(:first-child) td {
 }
 .player_buzzer--answering .buzzer {
 	background-color: #e65100 !important;
+}
+.dispute_btn {
+	display: none;
+	min-width: min(70vw, 280px);
+	padding: 14px 22px;
+	border: 2px solid #ffcc80;
+	border-radius: 10px;
+	background: linear-gradient(180deg, #ef6c00, #bf360c);
+	color: #fff;
+	font-family: 'Korinna', sans-serif;
+	font-size: clamp(18px, 4.5vw, 28px);
+	font-weight: 900;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	cursor: pointer;
+	box-shadow: 0 3px 14px rgba(0, 0, 0, 0.35);
+}
+.dispute_btn:not([hidden]) {
+	display: inline-block;
+}
+.dispute_btn:active {
+	transform: translateY(2px);
+}
+.player-dispute-review {
+	margin: 10px 12px 0;
+	padding: 14px 16px;
+	border-radius: 12px;
+	background: linear-gradient(145deg, rgba(70, 30, 10, 0.95), rgba(40, 15, 5, 0.97));
+	border: 1px solid rgba(255, 180, 80, 0.45);
+	color: #ffcc80;
+	font-family: 'Korinna', sans-serif;
+	font-size: clamp(15px, 3.8vw, 22px);
+	font-weight: 700;
+	line-height: 1.25;
+	text-align: center;
+	text-shadow: var(--jeopardy-text-shadow);
+}
+.player-dispute-review--hidden {
+	display: none !important;
+}
+.player-dispute-review p {
+	margin: 0;
 }
 
 #answer_field, #bet_field{
