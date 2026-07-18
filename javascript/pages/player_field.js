@@ -34,7 +34,14 @@ $(document).ready(function() {
 
 	function showPlayerDisputeButton() {
 		disputeWindowOpen = true;
+		/* Button uses position:fixed + z-index above #message_overlay so it
+		   stays tappable while the dispute prompt covers the player field. */
 		$('#dispute_btn').prop('hidden', false).prop('disabled', false);
+	}
+
+	function showPlayerDisputePrompt() {
+		showPlayerDisputeButton();
+		postScreenMessage('Press Dispute to challenge this ruling.', false, 0);
 	}
 
 	function showPlayerDisputeReview(playerName, answer) {
@@ -1401,8 +1408,7 @@ $(document).ready(function() {
 	 				'WAIT'
 	 			);
 	 			if (playerName == score.playerName) {
-	 				showPlayerDisputeButton();
-	 				postScreenMessage('Press Dispute to challenge this ruling.', false, 0);
+	 				showPlayerDisputePrompt();
 	 			} else if (!buzzerLock) {
 	 				staticMessageOff();
 	 			}
@@ -1444,7 +1450,7 @@ $(document).ready(function() {
 	 	if (!data || data.playerName !== playerName) {
 	 		return;
 	 	}
-	 	showPlayerDisputeButton();
+	 	showPlayerDisputePrompt();
 	 	setPlayerBuzzerState(
 	 		'taken',
 	 		'INCORRECT — DISPUTE NOW IF YOU WANT REVIEW',
