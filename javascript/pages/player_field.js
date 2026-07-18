@@ -27,12 +27,17 @@ $(document).ready(function() {
 	var curQuestionId = '';
 	var disputeWindowOpen = false;
 
-	function parkPlayerDisputeButton() {
+	function detachPlayerDisputeButton() {
 		var $btn = $('#dispute_btn');
 		if ($btn.length && $btn.parent().is('#message_overlay')) {
+			/* Must leave the overlay before .empty() — jQuery clears handlers on children. */
 			$('body').append($btn);
 		}
-		$btn.attr('hidden', true).prop('disabled', false);
+		return $btn;
+	}
+
+	function parkPlayerDisputeButton() {
+		detachPlayerDisputeButton().attr('hidden', true).prop('disabled', false);
 	}
 
 	function hidePlayerDisputeButton() {
@@ -42,7 +47,9 @@ $(document).ready(function() {
 
 	function showPlayerDisputePrompt() {
 		disputeWindowOpen = true;
-		var $btn = $('#dispute_btn').removeAttr('hidden').prop('disabled', false);
+		var $btn = detachPlayerDisputeButton()
+			.removeAttr('hidden')
+			.prop('disabled', false);
 		/* Build the prompt inside the overlay so the button is part of the same
 		   layer — fixed z-index inside .player_field cannot beat the overlay. */
 		$('#message_overlay')
@@ -1471,7 +1478,11 @@ $(document).ready(function() {
 	 	if (!data || data.playerName !== playerName) {
 	 		return;
 	 	}
-	 	showPlayerDisputePrompt();
+	 	/* score update may already have shown the prompt — avoid rebuilding it
+	 	   (a second .empty() would strip the button click handler). */
+	 	if (!disputeWindowOpen) {
+	 		showPlayerDisputePrompt();
+	 	}
 	 	setPlayerBuzzerState(
 	 		'taken',
 	 		'INCORRECT — DISPUTE NOW IF YOU WANT REVIEW',
@@ -1480,7 +1491,11 @@ $(document).ready(function() {
 	 });
 
 	 socket.on('dispute window closed', function () {
+	 	var wasDisputing = disputeWindowOpen;
 	 	hidePlayerDisputeButton();
+	 	if (wasDisputing) {
+	 		staticMessageOff();
+	 	}
 	 });
 
 	 socket.on('answer dispute started', function (data) {
@@ -1519,12 +1534,20 @@ $(document).ready(function() {
 	 	}
 	 });
 
-	 $('#dispute_btn').on('click', function () {
+	 /* Delegated: button is moved in/out of the overlay, and .empty() can wipe direct handlers. */
+	 $(document).on('click', '#dispute_btn', function () {
 	 	if (!disputeWindowOpen) {
 	 		return;
 	 	}
 	 	$(this).prop('disabled', true);
 	 	socket.emit('answer dispute');
+	 });
+
+	 socket.on('answer dispute rejected', function () {
+	 	$('#dispute_btn').prop('disabled', false);
+	 	if (disputeWindowOpen) {
+	 		showPlayerDisputePrompt();
+	 	}
 	 });
 
 	 socket.on('final jeopardy reveal player', function(data){

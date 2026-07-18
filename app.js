@@ -1733,9 +1733,11 @@ playerSpc.on('connection', function (socket) {
 			r.disputeInProgress ||
 			!socket.contestantName
 		) {
+			socket.emit('answer dispute rejected', { reason: 'unavailable' });
 			return;
 		}
 		if (socket.contestantName !== r.pendingDispute.playerName) {
+			socket.emit('answer dispute rejected', { reason: 'not_yours' });
 			return;
 		}
 		beginAnswerDisputeReview(r);
