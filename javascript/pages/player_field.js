@@ -88,7 +88,6 @@ $(document).ready(function() {
 		$('#team_name_field').prop('hidden', gameMode !== 'team');
 		renderTeamSelection();
 		updateJoinButtonState();
-		attemptAutoLoginFromStorage();
 	});
 	socket.on('team selection update', function (state) {
 		teamSelectionState = state || { teams: [], canCreate: false, registrationClosed: true };
@@ -141,10 +140,8 @@ $(document).ready(function() {
 	var playerConnectionOnline = false;
 	const SOUNDS_DIR = "../../game-media/sounds/";
 	const IMAGES_DIR =  "../../game-media/images/";
-	var PLAYER_NAME_STORAGE_KEY = 'jeopardy.playerName';
 	var TEAM_NAME_STORAGE_KEY = 'jeopardy.teamName';
 	var CLIENT_ID_STORAGE_KEY = 'jeopardy.clientId';
-	var autoLoginFromStorageDone = false;
 	var waitForStartGameTimer = null;
 
 	function setPlayerConnectionState(state, label) {
@@ -201,26 +198,6 @@ $(document).ready(function() {
 		}
 	}
 	var playerClientId = getClientId();
-
-	function readStoredPlayerName() {
-		try {
-			var raw = localStorage.getItem(PLAYER_NAME_STORAGE_KEY);
-			if (!raw || !raw.trim()) {
-				return '';
-			}
-			return raw.trim().toUpperCase();
-		} catch (e) {
-			return '';
-		}
-	}
-
-	function persistPlayerName(name) {
-		try {
-			if (name) {
-				localStorage.setItem(PLAYER_NAME_STORAGE_KEY, name);
-			}
-		} catch (e) { /* private mode / quota */ }
-	}
 
 	function readStoredTeamName() {
 		try {
@@ -366,7 +343,6 @@ $(document).ready(function() {
 	function beginPlayerJoin(loginNameStripped, teamNameStripped) {
 		memberName = loginNameStripped;
 		playerName = gameMode === 'team' ? teamNameStripped : loginNameStripped;
-		persistPlayerName(memberName);
 		if (gameMode === 'team') {
 			persistTeamName(playerName);
 		}
@@ -376,34 +352,6 @@ $(document).ready(function() {
 		}
 		updatePlayerIdentityDisplay();
 		$('#player_score').html('0');
-	}
-
-	function attemptAutoLoginFromStorage() {
-		if (!roomConfigurationLoaded || autoLoginFromStorageDone || playerName) {
-			return;
-		}
-		var saved = readStoredPlayerName();
-		if (!saved) {
-			return;
-		}
-		var savedTeam = gameMode === 'team' ? readStoredTeamName() : '';
-		if (gameMode === 'team' && !savedTeam) {
-			return;
-		}
-		if (
-			gameMode === 'team' &&
-			!teamSelectionState.teams.some(function (team) {
-				return String(team.name || '').trim().toUpperCase() === savedTeam;
-			})
-		) {
-			return;
-		}
-		autoLoginFromStorageDone = true;
-		$('#login_name').val(saved);
-		$('#login_team_name').val(savedTeam);
-		$('#join_btn').prop('disabled', true);
-		beginPlayerJoin(saved, savedTeam);
-		socket.emit('login name', loginPayload(saved, savedTeam, false));
 	}
 
 	var speechRecognition = null;
@@ -543,7 +491,6 @@ $(document).ready(function() {
 		playerName = n;
 		memberName = state['member-name'] || memberName || playerName;
 		gameMode = state.mode || gameMode;
-		persistPlayerName(memberName);
 		if (gameMode === 'team') {
 			persistTeamName(playerName);
 		}
@@ -745,23 +692,6 @@ $(document).ready(function() {
 
 	$('#join_btn').prop('disabled', true);
 
-	if (readStoredPlayerName()) {
-		$('#jeopardy_saved_name_hint').prop('hidden', false);
-	}
-	$('#jeopardy_clear_saved_player').on('click', function () {
-		try {
-			localStorage.removeItem(PLAYER_NAME_STORAGE_KEY);
-			localStorage.removeItem(TEAM_NAME_STORAGE_KEY);
-		} catch (e) { /* ignore */ }
-		autoLoginFromStorageDone = true;
-		$('#login_name').val('');
-		$('#login_team_name').val('');
-		creatingNewTeam = false;
-		renderTeamSelection();
-		updateJoinButtonState();
-		$('#jeopardy_saved_name_hint').prop('hidden', true);
-	});
-
 	$('#team_selection_options').on('click', '.team-selection-card', function () {
 		if ($(this).prop('disabled')) {
 			return;
@@ -803,7 +733,6 @@ $(document).ready(function() {
 	  		else
 	  		{
 	  			$('#join_btn').prop('disabled', true);
-	  			autoLoginFromStorageDone = true;
 	  			beginPlayerJoin(loginNameStripped, teamNameStripped);
 	  			socket.emit(
 	  				'login name',
@@ -2104,8 +2033,5 @@ $(document).ready(function() {
 
 	if (socket.connected) {
 		setPlayerConnectionState('online', 'Connected');
-		attemptAutoLoginFromStorage();
-	} else {
-		socket.on('connect', attemptAutoLoginFromStorage);
 	}
 });

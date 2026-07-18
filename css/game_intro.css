@@ -113,16 +113,25 @@ HTML, BODY {
 }
 
 /* Host: room code for /home player join flow */
+/* QR is ~25% of the shorter viewport side for easy TV scanning */
+:root {
+  --host-qr-size: 25vmin;
+  --host-room-panel-top: 14px;
+  --host-room-panel-pad: 14px;
+  --host-lobby-controls-top: calc(
+    var(--host-room-panel-top) + (var(--host-room-panel-pad) * 2) + var(--host-qr-size) + 12px
+  );
+}
 .host-room-code-panel {
   position: fixed;
-  top: 14px;
+  top: var(--host-room-panel-top);
   left: 14px;
   z-index: 99995;
   display: flex;
   align-items: center;
-  gap: 14px;
-  max-width: min(92vw, 420px);
-  padding: 14px;
+  gap: 16px;
+  max-width: min(96vw, calc(240px + var(--host-qr-size) + 44px));
+  padding: var(--host-room-panel-pad);
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
@@ -135,6 +144,7 @@ HTML, BODY {
 }
 .host-room-code-panel__details {
   min-width: 0;
+  flex: 1 1 180px;
 }
 .host-room-code-panel__label {
   display: block;
@@ -165,12 +175,12 @@ HTML, BODY {
   font-weight: 800;
 }
 .host-room-code-panel__qr {
-  flex: 0 0 104px;
-  width: 104px;
-  height: 104px;
-  padding: 5px;
+  flex: 0 0 var(--host-qr-size);
+  width: var(--host-qr-size);
+  height: var(--host-qr-size);
+  padding: 10px;
   box-sizing: border-box;
-  border-radius: 8px;
+  border-radius: 10px;
   background: #fff;
 }
 .host-room-code-panel__hint {
@@ -204,7 +214,7 @@ body.host-board-active .host-round-timer__label {
 /* Host: escape hatch when the room is stuck (e.g. Final Jeopardy after refresh) */
 .host-new-game-btn {
   position: fixed;
-  top: 166px;
+  top: var(--host-lobby-controls-top);
   left: 14px;
   z-index: 99996;
   padding: 8px 14px;
@@ -232,7 +242,7 @@ body.host-board-active .host-round-timer__label {
 
 .host-mode-badge {
   position: fixed;
-  top: 166px;
+  top: var(--host-lobby-controls-top);
   left: 132px;
   z-index: 99996;
   max-width: 220px;
@@ -249,7 +259,7 @@ body.host-board-active .host-round-timer__label {
 }
 .host-dispute-toggle {
   position: fixed;
-  top: 166px;
+  top: var(--host-lobby-controls-top);
   left: 360px;
   z-index: 99996;
   max-width: 200px;
@@ -307,11 +317,11 @@ body.host-board-active .host-dispute-toggle {
 /* Host: who has connected (visible on intro before the board loads; updates after refresh) */
 .host-player-roster {
   position: fixed;
-  top: 220px;
+  top: calc(var(--host-lobby-controls-top) + 52px);
   left: 14px;
   z-index: 99996;
   width: min(92vw, 390px);
-  max-height: calc(100vh - 300px);
+  max-height: calc(100vh - var(--host-lobby-controls-top) - 70px);
   padding: 10px 14px;
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.5);

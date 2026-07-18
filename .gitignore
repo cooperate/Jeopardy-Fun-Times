@@ -26,3 +26,6 @@ Thumbs.db
 # Optional tooling
 coverage/
 .nyc_output/
+
+# Runtime j-archive pack download + decade caches (can be large)
+data/jarchive-cache/

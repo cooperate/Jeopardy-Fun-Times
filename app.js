@@ -3006,7 +3006,9 @@ function selectGameForRoom(room, callback) {
 		});
 	}
 	if (room.episodeFilter && room.episodeFilter !== 'any') {
-		hostMsg('Loading tournament episode from pack (if available)…');
+		hostMsg(
+			'Loading tournament episode from pack (first download can take a minute)…'
+		);
 		jarchiveDynamic.selectPackEpisodeIntoDb(
 			db,
 			room.decade,
@@ -3040,7 +3042,9 @@ function selectGameForRoom(room, callback) {
 				callback(local202);
 				return;
 			}
-			hostMsg('No 2020s games in database; loading from episode pack…');
+			hostMsg(
+				'No 2020s games in database; downloading episode pack (first time can take a minute)…'
+			);
 			jarchiveDynamic.selectPackEpisodeIntoDb(
 				db,
 				'20s',
@@ -3068,7 +3072,7 @@ function selectGameForRoom(room, callback) {
 						callback(packRet);
 						return;
 					}
-					hostMsg('Searching local library (1980s–2010s)…');
+					hostMsg('Pack unavailable; searching local library (1980s–2010s)…');
 					selectByAirYearPrefixList(
 						['198', '199', '200', '201'],
 						playedGameIds,

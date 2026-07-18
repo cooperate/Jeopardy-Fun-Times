@@ -504,7 +504,7 @@ $(document).ready(function() {
 			$('#host_join_qr')
 				.attr(
 					'src',
-					'https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=' +
+					'https://api.qrserver.com/v1/create-qr-code/?size=640x640&margin=8&data=' +
 						encodeURIComponent(joinUrl)
 				)
 				.prop('hidden', false);

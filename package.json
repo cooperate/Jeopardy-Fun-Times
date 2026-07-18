@@ -9,7 +9,8 @@
     "openai": "^6.33.0",
     "papaparse": "^5.4.1",
     "socket.io": "^4.8.3",
-    "sqlite3": "^6.0.1"
+    "sqlite3": "^6.0.1",
+    "stream-json": "^3.5.0"
   },
   "scripts": {
     "start": "node app.js",
