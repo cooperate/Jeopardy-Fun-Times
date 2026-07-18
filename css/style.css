@@ -1315,6 +1315,7 @@ body.host-many-players #game_board tr:not(:first-child) td {
 }
 .dispute_btn {
 	display: none;
+	flex-shrink: 0;
 	min-width: min(70vw, 280px);
 	padding: 14px 22px;
 	border: 2px solid #ffcc80;
@@ -1329,18 +1330,24 @@ body.host-many-players #game_board tr:not(:first-child) td {
 	cursor: pointer;
 	box-shadow: 0 3px 14px rgba(0, 0, 0, 0.35);
 }
-/* Sit above #message_overlay (z-index 98) so the player can tap Dispute
-   while the "Press Dispute…" prompt is on screen. */
 .dispute_btn:not([hidden]) {
 	display: inline-block;
-	position: fixed;
-	left: 50%;
-	bottom: max(32px, calc(12vh + env(safe-area-inset-bottom, 0px)));
-	transform: translateX(-50%);
-	z-index: 100;
 }
 .dispute_btn:active {
-	transform: translateX(-50%) translateY(2px);
+	transform: translateY(2px);
+}
+#message_overlay:has(#dispute_btn:not([hidden])) {
+	flex-direction: column;
+	gap: clamp(20px, 5vh, 36px);
+	padding: 24px 16px;
+	box-sizing: border-box;
+}
+#message_overlay .player-dispute-prompt__title {
+	font-size: clamp(1.35rem, 6vw, 2.4rem);
+	padding-left: 8%;
+	padding-right: 8%;
+	max-width: 22ch;
+	line-height: 1.2;
 }
 .player-dispute-review {
 	margin: 10px 12px 0;

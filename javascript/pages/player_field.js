@@ -27,21 +27,42 @@ $(document).ready(function() {
 	var curQuestionId = '';
 	var disputeWindowOpen = false;
 
-	function hidePlayerDisputeButton() {
-		disputeWindowOpen = false;
-		$('#dispute_btn').prop('hidden', true).prop('disabled', false);
+	function parkPlayerDisputeButton() {
+		var $btn = $('#dispute_btn');
+		if ($btn.length && $btn.parent().is('#message_overlay')) {
+			$('body').append($btn);
+		}
+		$btn.attr('hidden', true).prop('disabled', false);
 	}
 
-	function showPlayerDisputeButton() {
-		disputeWindowOpen = true;
-		/* Button uses position:fixed + z-index above #message_overlay so it
-		   stays tappable while the dispute prompt covers the player field. */
-		$('#dispute_btn').prop('hidden', false).prop('disabled', false);
+	function hidePlayerDisputeButton() {
+		disputeWindowOpen = false;
+		parkPlayerDisputeButton();
 	}
 
 	function showPlayerDisputePrompt() {
-		showPlayerDisputeButton();
-		postScreenMessage('Press Dispute to challenge this ruling.', false, 0);
+		disputeWindowOpen = true;
+		var $btn = $('#dispute_btn').removeAttr('hidden').prop('disabled', false);
+		/* Build the prompt inside the overlay so the button is part of the same
+		   layer — fixed z-index inside .player_field cannot beat the overlay. */
+		$('#message_overlay')
+			.stop(true, true)
+			.empty()
+			.css({
+				display: 'flex',
+				flexDirection: 'column',
+				alignItems: 'center',
+				justifyContent: 'center',
+				gap: '28px'
+			})
+			.append(
+				$('<h2 class="player-dispute-prompt__title"></h2>').text(
+					'Press Dispute to challenge this ruling.'
+				)
+			)
+			.append($btn)
+			.hide()
+			.fadeIn('slow');
 	}
 
 	function showPlayerDisputeReview(playerName, answer) {
@@ -1883,6 +1904,9 @@ $(document).ready(function() {
 	//TODO: this function will post a message overlay on top of the board that will fade out.  handy for any alerts
 	function postScreenMessage(message, needsFadeOut, time, callback)
 	{
+		/* .html() would destroy #dispute_btn if it is currently inside the overlay. */
+		parkPlayerDisputeButton();
+		disputeWindowOpen = false;
 		$('#message_overlay').fadeIn('slow', callback);
 		$("#message_overlay").html("<h2>" + message + "</h2>");
 		if(needsFadeOut)
